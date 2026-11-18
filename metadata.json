@@ -1,0 +1,6 @@
+{
+  "name": "AudioPro",
+  "description": "Cross-platform low-latency USB Virtual Sound Card bridge for Android, iOS, and Windows with real-time audio routing and Flutter codebase explorer.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}
