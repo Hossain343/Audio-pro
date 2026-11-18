@@ -42,9 +42,9 @@ class CyberTheme {
       ),
       sliderTheme: SliderThemeData(
         activeTrackColor: cyanAccent,
-        inactiveTrackColor: Colors.white.withValues(alpha: 0.12),
+        inactiveTrackColor: Colors.white.withAlpha(31),
         thumbColor: cyanAccent,
-        overlayColor: cyanAccent.withValues(alpha: 0.16),
+        overlayColor: cyanAccent.withAlpha(41),
       ),
       useMaterial3: true,
     );

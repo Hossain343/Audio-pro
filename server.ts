@@ -1,5 +1,4 @@
 import express from 'express';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +8,7 @@ import { buildZipArchive, type ZipEntryInput } from './src/audio/protocol.ts';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, 'audio_pro');
+const WORKFLOW_FILE = path.resolve(__dirname, '.github/workflows/build.yml');
 
 interface RepoFileEntry {
   path: string;
@@ -29,15 +29,15 @@ function classifyPath(relPath: string): RepoFileEntry['category'] {
   return 'Root';
 }
 
-function walkRepoFiles(dir: string, baseDir: string, includeGit = false): string[] {
+function walkRepoFiles(dir: string, baseDir: string): string[] {
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const results: string[] = [];
   for (const entry of entries) {
-    if (!includeGit && entry.name === '.git') continue;
+    if (entry.name === '.git') continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      results.push(...walkRepoFiles(full, baseDir, includeGit));
+      results.push(...walkRepoFiles(full, baseDir));
     } else if (entry.isFile()) {
       results.push(path.relative(baseDir, full).replace(/\\/g, '/'));
     }
@@ -51,18 +51,30 @@ async function startServer() {
 
   app.get('/api/repo/files', (_req, res) => {
     try {
-      const relPaths = walkRepoFiles(REPO_ROOT, REPO_ROOT, false);
+      const relPaths = walkRepoFiles(REPO_ROOT, REPO_ROOT);
       const files: RepoFileEntry[] = relPaths.map((rel) => {
         const full = path.join(REPO_ROOT, rel);
         const content = fs.readFileSync(full, 'utf8');
         return {
-          path: rel,
+          path: `audio_pro/${rel}`,
           category: classifyPath(rel),
           sizeBytes: Buffer.byteLength(content, 'utf8'),
           lines: content.split('\n').length,
           content,
         };
       });
+
+      if (fs.existsSync(WORKFLOW_FILE)) {
+        const wfContent = fs.readFileSync(WORKFLOW_FILE, 'utf8');
+        files.unshift({
+          path: '.github/workflows/build.yml',
+          category: 'CI/CD',
+          sizeBytes: Buffer.byteLength(wfContent, 'utf8'),
+          lines: wfContent.split('\n').length,
+          content: wfContent,
+        });
+      }
+
       res.json({ repoName: 'audio_pro', fileCount: files.length, files });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -71,32 +83,15 @@ async function startServer() {
 
   app.get('/api/repo/git', (_req, res) => {
     try {
-      const branch = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', '--abbrev-ref', 'HEAD'], {
-        encoding: 'utf8',
-      }).trim();
-      const commitHash = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', '--short', 'HEAD'], {
-        encoding: 'utf8',
-      }).trim();
-      const commitMessage = execFileSync('git', ['-C', REPO_ROOT, 'log', '-1', '--pretty=%s'], {
-        encoding: 'utf8',
-      }).trim();
-      const remoteOrigin = execFileSync('git', ['-C', REPO_ROOT, 'remote', 'get-url', 'origin'], {
-        encoding: 'utf8',
-      }).trim();
-      const trackedFiles = execFileSync('git', ['-C', REPO_ROOT, 'ls-files'], {
-        encoding: 'utf8',
-      })
-        .trim()
-        .split('\n')
-        .filter(Boolean).length;
-
+      const relPaths = walkRepoFiles(REPO_ROOT, REPO_ROOT);
+      const hasWorkflow = fs.existsSync(WORKFLOW_FILE);
       res.json({
         initialized: true,
-        branch,
-        commitHash,
-        commitMessage,
-        remoteOrigin,
-        trackedFiles,
+        syncMode: 'AI Studio GitHub Sync (Clean Workspace Tree)',
+        branch: 'main',
+        workflowPath: hasWorkflow ? '.github/workflows/build.yml' : 'Missing',
+        nestedGitPresent: fs.existsSync(path.join(REPO_ROOT, '.git')),
+        trackedFiles: relPaths.length + (hasWorkflow ? 1 : 0),
       });
     } catch (err) {
       res.json({
@@ -108,11 +103,19 @@ async function startServer() {
 
   app.get('/api/repo/download', (_req, res) => {
     try {
-      const relPaths = walkRepoFiles(REPO_ROOT, REPO_ROOT, false);
+      const relPaths = walkRepoFiles(REPO_ROOT, REPO_ROOT);
       const entries: ZipEntryInput[] = relPaths.map((rel) => ({
         path: `audio_pro/${rel}`,
         content: new Uint8Array(fs.readFileSync(path.join(REPO_ROOT, rel))),
       }));
+
+      if (fs.existsSync(WORKFLOW_FILE)) {
+        entries.push({
+          path: '.github/workflows/build.yml',
+          content: new Uint8Array(fs.readFileSync(WORKFLOW_FILE)),
+        });
+      }
+
       const zipBuffer = Buffer.from(buildZipArchive(entries));
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', 'attachment; filename="audio_pro.zip"');

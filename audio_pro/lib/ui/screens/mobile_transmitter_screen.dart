@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/audio_device.dart';
 import '../../services/audio_bridge_controller.dart';
@@ -210,7 +211,7 @@ class MobileTransmitterScreen extends StatelessWidget {
                             .toList(),
                         onChanged: (endpoint) {
                           if (endpoint != null) {
-                            controller.selectInputDevice(endpoint);
+                            unawaited(controller.selectInputDevice(endpoint));
                           }
                         },
                       ),
@@ -286,7 +287,7 @@ class MobileTransmitterScreen extends StatelessWidget {
                             .toList(),
                         onChanged: (endpoint) {
                           if (endpoint != null) {
-                            controller.selectOutputDevice(endpoint);
+                            unawaited(controller.selectOutputDevice(endpoint));
                           }
                         },
                       ),

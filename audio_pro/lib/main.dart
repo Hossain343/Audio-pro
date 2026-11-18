@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'services/audio_bridge_controller.dart';
 import 'ui/screens/desktop_receiver_screen.dart';
@@ -23,7 +24,7 @@ class _AudioProAppState extends State<AudioProApp> {
   void initState() {
     super.initState();
     _controller = AudioBridgeController();
-    _controller.initialize();
+    unawaited(_controller.initialize());
   }
 
   @override

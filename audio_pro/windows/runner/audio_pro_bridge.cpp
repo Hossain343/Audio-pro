@@ -261,8 +261,20 @@ void AudioProWinBridge::StopBridge() {
 
 void AudioProWinBridge::AdbUsbWatcherLoop(int port) {
   while (running_.load()) {
-    std::string cmd = "adb reverse tcp:" + std::to_string(port) + " tcp:" + std::to_string(port) + " >nul 2>&1";
-    std::system(cmd.c_str());
+    std::string cmd = "adb.exe reverse tcp:" + std::to_string(port) + " tcp:" + std::to_string(port);
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    std::vector<char> cmd_buf(cmd.begin(), cmd.end());
+    cmd_buf.push_back('\0');
+    if (CreateProcessA(nullptr, cmd_buf.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+      WaitForSingleObject(pi.hProcess, 1500);
+      CloseHandle(pi.hProcess);
+      CloseHandle(pi.hThread);
+    }
     for (int i = 0; i < 25 && running_.load(); i++) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }

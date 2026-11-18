@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/audio_device.dart';
 import '../../services/audio_bridge_controller.dart';
@@ -183,7 +184,9 @@ class DesktopReceiverScreen extends StatelessWidget {
                                     )
                                     .toList(),
                                 onChanged: (d) {
-                                  if (d != null) controller.selectOutputDevice(d);
+                                  if (d != null) {
+                                    unawaited(controller.selectOutputDevice(d));
+                                  }
                                 },
                               ),
                               const Spacer(),
@@ -231,7 +234,9 @@ class DesktopReceiverScreen extends StatelessWidget {
                                     )
                                     .toList(),
                                 onChanged: (d) {
-                                  if (d != null) controller.selectInputDevice(d);
+                                  if (d != null) {
+                                    unawaited(controller.selectInputDevice(d));
+                                  }
                                 },
                               ),
                               const Spacer(),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme/cyber_theme.dart';
@@ -39,7 +40,7 @@ class _VuMeterWaveformState extends State<VuMeterWaveform>
           _phase += 0.16;
         });
       });
-    _ticker.repeat();
+    unawaited(_ticker.repeat());
   }
 
   @override
@@ -86,7 +87,7 @@ class _VuWaveformPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final barSpacing = 4.0;
+    const barSpacing = 4.0;
     final totalSpacing = barSpacing * (barCount - 1);
     final barWidth = ((size.width - totalSpacing) / barCount).clamp(2.0, 14.0);
     final midY = size.height / 2;
@@ -113,7 +114,7 @@ class _VuWaveformPainter extends CustomPainter {
 
       final Color color;
       if (isMuted) {
-        color = CyberTheme.textMuted.withValues(alpha: 0.35);
+        color = CyberTheme.textMuted.withAlpha(90);
       } else if (amplitude > 0.85) {
         color = CyberTheme.crimsonOff;
       } else if (amplitude > 0.62) {

@@ -3,10 +3,10 @@ import { useEffect, useState } from 'react';
 
 interface GitStatusResponse {
   initialized: boolean;
+  syncMode?: string;
   branch?: string;
-  commitHash?: string;
-  commitMessage?: string;
-  remoteOrigin?: string;
+  workflowPath?: string;
+  nestedGitPresent?: boolean;
   trackedFiles?: number;
   error?: string;
 }
@@ -16,8 +16,8 @@ const CI_JOBS = [
     id: 'analyze_and_test',
     title: '01. Dart Analyze & Unit Tests',
     runner: 'ubuntu-latest',
-    command: 'flutter analyze --fatal-infos && flutter test --coverage',
-    artifact: 'Coverage & lint gate',
+    command: 'flutter analyze && flutter test',
+    artifact: 'Lint & test gate',
   },
   {
     id: 'build_android',
@@ -54,9 +54,10 @@ export function GitHubCiPanel() {
   }, []);
 
   const pushCommands = [
-    'unzip audio_pro.zip && cd audio_pro',
-    'git init -b main && git add -A && git commit -m "Initial audio_pro release"',
-    'git remote add origin https://github.com/<YOUR_USERNAME>/audio_pro.git',
+    '# In AI Studio: Open GitHub Sync panel -> Push changes to main',
+    '# Or locally from extracted audio_pro.zip:',
+    'git init -b main && git add -A && git commit -m "feat: sync audio_pro + workflows"',
+    'git remote add origin https://github.com/Hossain343/Audio-pro.git',
     'git push -u origin main',
   ].join('\n');
 
@@ -72,44 +73,45 @@ export function GitHubCiPanel() {
 
   return (
     <div className="space-y-6">
-      {/* Local Git Status + Push Instructions */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <section className="rounded-xl border border-white/[0.08] bg-[#111622] p-5">
           <div className="mb-4 flex items-center justify-between border-b border-white/[0.06] pb-3">
             <div className="flex items-center gap-2">
               <GitBranch className="h-4 w-4 text-cyan-400" aria-hidden="true" />
               <h2 className="font-display text-base font-semibold text-slate-100">
-                Local Git Repository Status
+                GitHub Sync Readiness
               </h2>
             </div>
             <span className="font-mono text-xs text-emerald-400">
-              {gitInfo?.initialized ? 'Committed' : 'Checking...'}
+              {gitInfo?.initialized && !gitInfo.nestedGitPresent ? 'Ready to Sync' : 'Checking...'}
             </span>
           </div>
 
           {gitInfo?.initialized ? (
             <dl className="space-y-3 text-xs">
               <div className="flex items-center justify-between border-b border-white/[0.05] pb-2">
-                <dt className="text-slate-400">Branch</dt>
+                <dt className="text-slate-400">Sync Mode</dt>
+                <dd className="font-mono font-medium text-slate-100">{gitInfo.syncMode}</dd>
+              </div>
+              <div className="flex items-center justify-between border-b border-white/[0.05] pb-2">
+                <dt className="text-slate-400">Target Branch</dt>
                 <dd className="font-mono font-semibold text-slate-100">{gitInfo.branch}</dd>
               </div>
               <div className="flex items-center justify-between border-b border-white/[0.05] pb-2">
-                <dt className="text-slate-400">Latest Commit</dt>
-                <dd className="font-mono text-cyan-300">{gitInfo.commitHash}</dd>
+                <dt className="text-slate-400">Workflow File</dt>
+                <dd className="font-mono text-cyan-300">{gitInfo.workflowPath}</dd>
               </div>
               <div className="flex items-center justify-between border-b border-white/[0.05] pb-2">
-                <dt className="text-slate-400">Tracked Files</dt>
+                <dt className="text-slate-400">Flutter + Native Files</dt>
                 <dd className="font-mono tabular-nums text-slate-100">
                   {gitInfo.trackedFiles} files
                 </dd>
               </div>
-              <div className="flex items-center justify-between gap-4 border-b border-white/[0.05] pb-2">
-                <dt className="shrink-0 text-slate-400">Commit Message</dt>
-                <dd className="truncate font-mono text-slate-200">{gitInfo.commitMessage}</dd>
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <dt className="shrink-0 text-slate-400">Configured Origin</dt>
-                <dd className="truncate font-mono text-slate-300">{gitInfo.remoteOrigin}</dd>
+              <div className="flex items-center justify-between">
+                <dt className="text-slate-400">Nested Submodule Lock</dt>
+                <dd className="font-mono text-emerald-400">
+                  {gitInfo.nestedGitPresent ? 'Detected (needs removal)' : 'Clean (Removed)'}
+                </dd>
               </div>
             </dl>
           ) : (
@@ -124,7 +126,7 @@ export function GitHubCiPanel() {
             <div className="flex items-center gap-2">
               <Terminal className="h-4 w-4 text-cyan-400" aria-hidden="true" />
               <h2 className="font-display text-base font-semibold text-slate-100">
-                Push to GitHub & Trigger Actions
+                Sync & Trigger GitHub Actions
               </h2>
             </div>
             <button
@@ -147,9 +149,10 @@ export function GitHubCiPanel() {
           </div>
 
           <p className="mb-3 text-xs leading-relaxed text-slate-300">
-            This sandbox does not hold your GitHub PAT or SSH key, so remote push cannot execute
-            automatically from inside the container. Download the committed repository archive and
-            push to your <span className="font-mono text-cyan-300">audio_pro</span> repository:
+            The nested <span className="font-mono text-cyan-300">audio_pro/.git</span> folder was
+            removed and <span className="font-mono text-cyan-300">.github/workflows/build.yml</span>{' '}
+            is now at the repository root. Sync from the AI Studio GitHub panel to push all files
+            and start the builds automatically.
           </p>
 
           <pre className="overflow-x-auto rounded-lg border border-white/[0.06] bg-[#090C12] p-3.5 font-mono text-xs leading-relaxed text-slate-200">
@@ -169,7 +172,6 @@ export function GitHubCiPanel() {
         </section>
       </div>
 
-      {/* GitHub Actions Build Matrix */}
       <section className="rounded-xl border border-white/[0.08] bg-[#111622] p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
           <div className="flex items-center gap-2">
@@ -179,7 +181,7 @@ export function GitHubCiPanel() {
             </h2>
           </div>
           <span className="font-mono text-xs text-slate-400">
-            Triggers automatically on push to main / master
+            Working directory: ./audio_pro · Triggers on push to main
           </span>
         </div>
 
