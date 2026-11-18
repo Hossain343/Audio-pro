@@ -181,7 +181,8 @@ class MobileTransmitterScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<AudioEndpoint>(
-                        value: controller.selectedInput,
+                        key: ValueKey<String?>(controller.selectedInput?.id),
+                        initialValue: controller.selectedInput,
                         isExpanded: true,
                         dropdownColor: CyberTheme.bgSurfaceElevated,
                         decoration: InputDecoration(
@@ -257,7 +258,8 @@ class MobileTransmitterScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<AudioEndpoint>(
-                        value: controller.selectedOutput,
+                        key: ValueKey<String?>(controller.selectedOutput?.id),
+                        initialValue: controller.selectedOutput,
                         isExpanded: true,
                         dropdownColor: CyberTheme.bgSurfaceElevated,
                         decoration: InputDecoration(

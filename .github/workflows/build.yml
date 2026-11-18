@@ -65,6 +65,7 @@ jobs:
         run: |
           flutter create /tmp/scaffold --org com.audiopro --project-name audio_pro --platforms=android
           cp -rn /tmp/scaffold/android/* android/ || true
+          chmod +x android/gradlew || true
           flutter pub get
 
       - name: Build Android Release APK
@@ -137,12 +138,24 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Hydrate missing Xcode project & Podfile assets
+      - name: Hydrate missing Xcode project & register Swift bridge
         run: |
           flutter create /tmp/scaffold --org com.audiopro --project-name audio_pro --platforms=ios
           cp -rn /tmp/scaffold/ios/* ios/ || true
           flutter pub get
-          cd ios && pod install --repo-update
+          cd ios
+          ruby -e '
+            require "xcodeproj"
+            proj = Xcodeproj::Project.open("Runner.xcodeproj")
+            target = proj.targets.find { |t| t.name == "Runner" }
+            group = proj.main_group.find_subpath("Runner", true)
+            unless group.files.any? { |f| f.path == "AudioEngineBridge.swift" }
+              ref = group.new_file("AudioEngineBridge.swift")
+              target.add_file_references([ref])
+              proj.save
+            end
+          '
+          pod install --repo-update
 
       - name: Build iOS Release (No Codesign)
         run: flutter build ios --release --no-codesign

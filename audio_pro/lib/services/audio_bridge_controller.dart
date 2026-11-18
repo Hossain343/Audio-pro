@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../core/audio_device.dart';
 import 'native_audio_bridge.dart';
@@ -42,7 +43,7 @@ class AudioBridgeController extends ChangeNotifier {
       await _requestMobilePermissions();
     }
 
-    _vuSub?.cancel();
+    unawaited(_vuSub?.cancel());
     _vuSub = _bridge.vuSnapshots.listen(
       (snapshot) {
         vuSnapshot = snapshot;
@@ -54,7 +55,7 @@ class AudioBridgeController extends ChangeNotifier {
       },
     );
 
-    _usbSub?.cancel();
+    unawaited(_usbSub?.cancel());
     _usbSub = _bridge.usbEvents.listen((event) {
       final state = event['status']?.toString() ?? '';
       final remoteName = event['peerName']?.toString();
@@ -200,8 +201,8 @@ class AudioBridgeController extends ChangeNotifier {
   @override
   void dispose() {
     _reconnectTimer?.cancel();
-    _vuSub?.cancel();
-    _usbSub?.cancel();
+    unawaited(_vuSub?.cancel());
+    unawaited(_usbSub?.cancel());
     super.dispose();
   }
 }

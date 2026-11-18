@@ -55,6 +55,17 @@ class AudioEndpoint {
         'isInput': isInput,
         'isDefault': isDefault,
       };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioEndpoint &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          isInput == other.isInput;
+
+  @override
+  int get hashCode => Object.hash(id, isInput);
 }
 
 @immutable

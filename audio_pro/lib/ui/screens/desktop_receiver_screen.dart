@@ -172,7 +172,8 @@ class DesktopReceiverScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 10),
                               DropdownButtonFormField<AudioEndpoint>(
-                                value: controller.selectedOutput,
+                                key: ValueKey<String?>(controller.selectedOutput?.id),
+                                initialValue: controller.selectedOutput,
                                 isExpanded: true,
                                 dropdownColor: CyberTheme.bgSurfaceElevated,
                                 items: controller.outputDevices
@@ -222,7 +223,8 @@ class DesktopReceiverScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 10),
                               DropdownButtonFormField<AudioEndpoint>(
-                                value: controller.selectedInput,
+                                key: ValueKey<String?>(controller.selectedInput?.id),
+                                initialValue: controller.selectedInput,
                                 isExpanded: true,
                                 dropdownColor: CyberTheme.bgSurfaceElevated,
                                 items: controller.inputDevices
