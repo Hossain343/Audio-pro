@@ -21,6 +21,8 @@ class DesktopReceiverScreen extends StatefulWidget {
 class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
   late final TextEditingController _micNameController;
   late final TextEditingController _spkNameController;
+  late final TextEditingController _bindIpController;
+  late final TextEditingController _portController;
   bool _appliedNotice = false;
 
   @override
@@ -32,13 +34,37 @@ class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
     _spkNameController = TextEditingController(
       text: widget.controller.virtualSpkName,
     );
+    _bindIpController = TextEditingController(
+      text: widget.controller.hostAddress,
+    );
+    _portController = TextEditingController(
+      text: widget.controller.port.toString(),
+    );
   }
 
   @override
   void dispose() {
     _micNameController.dispose();
     _spkNameController.dispose();
+    _bindIpController.dispose();
+    _portController.dispose();
     super.dispose();
+  }
+
+  Future<void> _applyBindEndpoint() async {
+    final parsedPort = int.tryParse(_portController.text.trim()) ?? 38900;
+    await widget.controller.updateTargetEndpoint(
+      _bindIpController.text,
+      parsedPort,
+    );
+  }
+
+  Future<void> _testBindEndpoint() async {
+    final parsedPort = int.tryParse(_portController.text.trim()) ?? 38900;
+    await widget.controller.testTargetEndpoint(
+      _bindIpController.text,
+      parsedPort,
+    );
   }
 
   Future<void> _applyEndpointNames() async {
@@ -249,6 +275,146 @@ class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
                         );
                       },
                     ),
+                    const SizedBox(height: 14),
+                    const Divider(height: 1, color: CyberTheme.borderHairline),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: <Widget>[
+                        SizedBox(
+                          width: 210,
+                          child: TextField(
+                            controller: _bindIpController,
+                            style: const TextStyle(fontSize: 13),
+                            decoration: InputDecoration(
+                              labelText: 'Server Bind IP',
+                              hintText: '0.0.0.0',
+                              filled: true,
+                              fillColor: CyberTheme.bgVoid,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 10,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 110,
+                          child: TextField(
+                            controller: _portController,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(fontSize: 13),
+                            decoration: InputDecoration(
+                              labelText: 'Port',
+                              hintText: '38900',
+                              filled: true,
+                              fillColor: CyberTheme.bgVoid,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 10,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        OutlinedButton(
+                          onPressed: () => unawaited(_applyBindEndpoint()),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: CyberTheme.cyanAccent,
+                            side: const BorderSide(
+                              color: CyberTheme.borderHairline,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 12,
+                            ),
+                          ),
+                          child: const Text('Apply IP/Port'),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: controller.isTestingEndpoint
+                              ? null
+                              : () => unawaited(_testBindEndpoint()),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: CyberTheme.cyanAccent,
+                            side: const BorderSide(
+                              color: CyberTheme.borderHairline,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 12,
+                            ),
+                          ),
+                          icon: const Icon(Icons.network_check_rounded, size: 16),
+                          label: Text(
+                            controller.isTestingEndpoint
+                                ? 'Testing...'
+                                : 'Test IP / Port',
+                          ),
+                        ),
+                        const Spacer(),
+                        const Text(
+                          'USB Cable: ADB + Apple usbmuxd',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: CyberTheme.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (controller.endpointTestResult != null) ...<Widget>[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: CyberTheme.bgVoid,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: controller.endpointTestResult!.ok
+                                ? CyberTheme.emeraldOk
+                                : CyberTheme.amberWait,
+                          ),
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            Icon(
+                              controller.endpointTestResult!.ok
+                                  ? Icons.check_circle_outline_rounded
+                                  : Icons.warning_amber_rounded,
+                              size: 16,
+                              color: controller.endpointTestResult!.ok
+                                  ? CyberTheme.emeraldOk
+                                  : CyberTheme.amberWait,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${controller.endpointTestResult!.summary}'
+                                '${controller.endpointTestResult!.details.isNotEmpty ? " · ${controller.endpointTestResult!.details}" : ""}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: controller.endpointTestResult!.ok
+                                      ? CyberTheme.emeraldOk
+                                      : CyberTheme.amberWait,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),

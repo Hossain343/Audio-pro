@@ -15,6 +15,8 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.net.InetSocketAddress
+import java.net.Socket
 
 class MainActivity : FlutterActivity() {
     private val methodChannelName = "com.audiopro/bridge"
@@ -113,6 +115,46 @@ class MainActivity : FlutterActivity() {
                     }
                     "getLocalDeviceName" -> {
                         result.success("${Build.MANUFACTURER} ${Build.MODEL}")
+                    }
+                    "testEndpoint" -> {
+                        val host = (call.argument<String>("host") ?: "127.0.0.1").trim().ifEmpty { "127.0.0.1" }
+                        val port = call.argument<Int>("port") ?: 38900
+                        Thread {
+                            val t0 = System.nanoTime()
+                            var ok = false
+                            var portInUse = false
+                            var summary: String
+                            val sock = Socket()
+                            try {
+                                sock.connect(InetSocketAddress(host, port), 1500)
+                                ok = true
+                                portInUse = true
+                                val rttMs = (System.nanoTime() - t0) / 1_000_000.0
+                                summary = String.format("REACHABLE — %s:%d connected (%.1f ms)", host, port, rttMs)
+                            } catch (e: Exception) {
+                                ok = false
+                                summary = "UNREACHABLE — $host:$port (${e.javaClass.simpleName}: ${e.message ?: "refused"})"
+                            } finally {
+                                try { sock.close() } catch (_: Exception) {}
+                            }
+                            mainHandler.post {
+                                AudioProService.usbSink?.success(
+                                    mapOf(
+                                        "status" to "log",
+                                        "source" to "ANDROID-KT",
+                                        "message" to "Endpoint test [$host:$port]: $summary"
+                                    )
+                                )
+                                result.success(
+                                    mapOf(
+                                        "ok" to ok,
+                                        "portInUse" to portInUse,
+                                        "summary" to summary,
+                                        "details" to "Android USB tunnel uses adb reverse (127.0.0.1:$port)"
+                                    )
+                                )
+                            }
+                        }.start()
                     }
                     else -> result.notImplemented()
                 }

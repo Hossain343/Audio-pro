@@ -50,6 +50,15 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
     );
   }
 
+  Future<void> _testEndpoint() async {
+    FocusScope.of(context).unfocus();
+    final parsedPort = int.tryParse(_portController.text.trim()) ?? 38900;
+    await widget.controller.testTargetEndpoint(
+      _hostController.text,
+      parsedPort,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -236,8 +245,62 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                             onPressed: () => unawaited(_applyEndpoint()),
                             child: const Text('Set'),
                           ),
+                          const SizedBox(width: 6),
+                          OutlinedButton(
+                            onPressed: controller.isTestingEndpoint
+                                ? null
+                                : () => unawaited(_testEndpoint()),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: CyberTheme.cyanAccent,
+                            ),
+                            child: Text(
+                              controller.isTestingEndpoint ? '...' : 'Test',
+                            ),
+                          ),
                         ],
                       ),
+                      if (controller.endpointTestResult != null) ...<Widget>[
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: CyberTheme.bgVoid,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: controller.endpointTestResult!.ok
+                                  ? CyberTheme.emeraldOk
+                                  : CyberTheme.amberWait,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                controller.endpointTestResult!.summary,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: controller.endpointTestResult!.ok
+                                      ? CyberTheme.emeraldOk
+                                      : CyberTheme.amberWait,
+                                ),
+                              ),
+                              if (controller
+                                  .endpointTestResult!.details.isNotEmpty) ...<Widget>[
+                                const SizedBox(height: 3),
+                                Text(
+                                  controller.endpointTestResult!.details,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: CyberTheme.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

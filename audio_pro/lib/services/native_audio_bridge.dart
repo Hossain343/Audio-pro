@@ -2,6 +2,29 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import '../core/audio_device.dart';
 
+class EndpointTestResult {
+  const EndpointTestResult({
+    required this.ok,
+    required this.portInUse,
+    required this.summary,
+    this.details = '',
+  });
+
+  factory EndpointTestResult.fromMap(Map<dynamic, dynamic> map) {
+    return EndpointTestResult(
+      ok: map['ok'] == true,
+      portInUse: map['portInUse'] == true,
+      summary: map['summary']?.toString() ?? 'Test completed',
+      details: map['details']?.toString() ?? '',
+    );
+  }
+
+  final bool ok;
+  final bool portInUse;
+  final String summary;
+  final String details;
+}
+
 /// Platform channel bridge into Kotlin (Android), Swift (iOS), and C++ (Windows).
 class NativeAudioBridge {
   static const MethodChannel _method = MethodChannel('com.audiopro/bridge');
@@ -46,6 +69,35 @@ class NativeAudioBridge {
 
   Future<void> stopBridge() async {
     await _method.invokeMethod<void>('stopBridge');
+  }
+
+  Future<EndpointTestResult> testEndpoint({
+    required String host,
+    required int port,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<dynamic, dynamic>>(
+        'testEndpoint',
+        <String, dynamic>{
+          'host': host,
+          'port': port,
+        },
+      );
+      if (raw != null) {
+        return EndpointTestResult.fromMap(raw);
+      }
+      return const EndpointTestResult(
+        ok: false,
+        portInUse: false,
+        summary: 'No test response returned from native bridge',
+      );
+    } on MissingPluginException {
+      return const EndpointTestResult(
+        ok: false,
+        portInUse: false,
+        summary: 'Endpoint test not supported on this platform',
+      );
+    }
   }
 
   Future<List<AudioEndpoint>> listAudioEndpoints() async {

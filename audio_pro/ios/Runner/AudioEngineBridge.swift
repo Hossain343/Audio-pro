@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Darwin
 import Network
 import Flutter
 import UIKit
@@ -18,6 +19,8 @@ final class AudioEngineBridge: NSObject {
     private var isTapInstalled = false
 
     private var connection: NWConnection?
+    private var listener: NWListener?
+    private var listenerPort: UInt16 = 0
     private let audioQueue = DispatchQueue(label: "com.audiopro.ios.socket", qos: .userInteractive)
 
     private var isRunning = false
@@ -99,6 +102,12 @@ final class AudioEngineBridge: NSObject {
         case "stopBridge":
             stopBridge()
             result(nil)
+        case "testEndpoint":
+            let args = call.arguments as? [String: Any]
+            let port = UInt16(clamping: (args?["port"] as? Int) ?? 38900)
+            let rawHost = (args?["host"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let host = (rawHost?.isEmpty == false) ? rawHost! : "127.0.0.1"
+            testEndpoint(host: host, port: port, result: result)
         case "listAudioEndpoints":
             result(enumerateEndpoints())
         case "setInputDevice":
@@ -278,7 +287,10 @@ final class AudioEngineBridge: NSObject {
 
         // Only initialize AVAudioEngine if not already running; never tear down audio during TCP retries.
         ensureAudioEngineStarted(retryCount: 0)
-        connectSocket(host: targetHost, port: targetPort, deviceName: localDeviceName)
+        ensureListenerStarted(port: targetPort)
+        if targetHost != "127.0.0.1" && targetHost != "localhost" {
+            connectSocket(host: targetHost, port: targetPort, deviceName: localDeviceName)
+        }
     }
 
     private func ensureAudioEngineStarted(retryCount: Int) {
@@ -464,9 +476,109 @@ final class AudioEngineBridge: NSObject {
         }
     }
 
+    private func ensureListenerStarted(port: UInt16) {
+        audioQueue.async { [weak self] in
+            guard let self = self, self.isRunning else { return }
+            if let existing = self.listener, self.listenerPort == port {
+                switch existing.state {
+                case .ready, .setup, .waiting(_):
+                    return
+                default:
+                    existing.cancel()
+                    self.listener = nil
+                }
+            } else if let existing = self.listener {
+                existing.cancel()
+                self.listener = nil
+            }
+
+            let tcpOptions = NWProtocolTCP.Options()
+            tcpOptions.noDelay = true
+            let params = NWParameters(tls: nil, tcp: tcpOptions)
+            params.allowLocalEndpointReuse = true
+
+            guard let nwPort = NWEndpoint.Port(rawValue: port),
+                  let newListener = try? NWListener(using: params, on: nwPort) else {
+                self.emitLog("Failed to create NWListener on port \(port)")
+                return
+            }
+
+            self.listener = newListener
+            self.listenerPort = port
+
+            newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+                guard let self = self, self.listener === newListener else { return }
+                switch state {
+                case .ready:
+                    self.emitLog("USB Listener ready on :\(port) (awaiting Windows usbmuxd USB cable)")
+                    if self.connection == nil && (self.targetHost == "127.0.0.1" || self.targetHost == "localhost") {
+                        self.emitUsbStatus("connecting", peerName: "WINDOWS-HOST", transport: "USB Listener :\(port)")
+                    }
+                case .waiting(let err):
+                    self.emitLog("USB Listener waiting on :\(port): \(err.localizedDescription)")
+                case .failed(let err):
+                    self.emitLog("USB Listener failed on :\(port): \(err.localizedDescription)")
+                    self.emitUsbStatus("disconnected", peerName: nil, transport: "Port \(port) Busy/Error")
+                    self.listener = nil
+                case .cancelled:
+                    if self.listener === newListener {
+                        self.listener = nil
+                    }
+                default:
+                    break
+                }
+            }
+
+            newListener.newConnectionHandler = { [weak self] newConn in
+                guard let self = self, self.isRunning else {
+                    newConn.cancel()
+                    return
+                }
+                self.emitLog("Incoming USB tunnel connection accepted on :\(port)")
+                if let oldConn = self.connection {
+                    oldConn.stateUpdateHandler = nil
+                    oldConn.cancel()
+                }
+                self.connection = newConn
+                let deviceName = self.localDeviceName
+                newConn.stateUpdateHandler = { [weak self, weak newConn] state in
+                    guard let self = self, let conn = newConn, self.connection === conn else { return }
+                    switch state {
+                    case .ready:
+                        self.emitLog("USB tunnel .ready; sending APRO handshake")
+                        self.emitUsbStatus("connected", peerName: "WINDOWS-HOST", transport: "USB Cable (usbmuxd)")
+                        let hello = [
+                            "deviceName": deviceName,
+                            "platform": "iOS",
+                            "sampleRate": 48000,
+                            "frameSamples": 240
+                        ] as [String: Any]
+                        if let json = try? JSONSerialization.data(withJSONObject: hello) {
+                            self.sendPacketOnAudioQueue(type: 0, channels: 1, payload: json)
+                        }
+                        self.receiveNextHeader(for: conn)
+                    case .failed(let err):
+                        self.emitLog("Incoming USB connection failed: \(err.localizedDescription)")
+                        self.handleSocketDisconnect(conn)
+                    case .cancelled:
+                        self.handleSocketDisconnect(conn)
+                    default:
+                        break
+                    }
+                }
+                newConn.start(queue: self.audioQueue)
+            }
+
+            newListener.start(queue: self.audioQueue)
+        }
+    }
+
     private func connectSocket(host: String, port: UInt16, deviceName: String) {
         audioQueue.async { [weak self] in
             guard let self = self, self.isRunning else { return }
+            if let existing = self.connection, case .ready = existing.state {
+                return
+            }
 
             if let oldConn = self.connection {
                 oldConn.stateUpdateHandler = nil
@@ -662,6 +774,12 @@ final class AudioEngineBridge: NSObject {
             guard let self = self else { return }
             self.pcmAccumulator.removeAll(keepingCapacity: false)
             self.pcmReadIndex = 0
+            if let l = self.listener {
+                l.stateUpdateHandler = nil
+                l.newConnectionHandler = nil
+                l.cancel()
+                self.listener = nil
+            }
             if let conn = self.connection {
                 conn.stateUpdateHandler = nil
                 conn.cancel()
@@ -669,6 +787,145 @@ final class AudioEngineBridge: NSObject {
             }
         }
         emitLog("stopBridge called")
+    }
+
+    private func testEndpoint(host: String, port: UInt16, result: @escaping FlutterResult) {
+        audioQueue.async { [weak self] in
+            guard let self = self else { return }
+            var isListenerActiveOnPort = false
+            if self.listenerPort == port, let l = self.listener, case .ready = l.state {
+                isListenerActiveOnPort = true
+            }
+
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { return }
+
+                var ok = false
+                var portInUse = false
+                var summary = ""
+                let isLocalLoopback = (host == "127.0.0.1" || host == "localhost")
+
+            if isLocalLoopback {
+                if isListenerActiveOnPort {
+                    ok = true
+                    portInUse = false
+                    summary = "READY — iPhone USB Listener is active on :\(port) (awaiting Windows usbmuxd USB cable)"
+                } else {
+                    let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+                    if fd < 0 {
+                        summary = "Socket error (errno=\(errno))"
+                    } else {
+                        var addr = sockaddr_in()
+                        addr.sin_family = sa_family_t(AF_INET)
+                        addr.sin_port = port.bigEndian
+                        addr.sin_addr.s_addr = INADDR_ANY.bigEndian
+                        let bindRes = withUnsafePointer(to: &addr) {
+                            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+                            }
+                        }
+                        if bindRes == 0 {
+                            ok = true
+                            portInUse = false
+                            summary = "FREE — Port :\(port) on iPhone is free & available for USB cable listener"
+                        } else {
+                            let err = errno
+                            ok = false
+                            portInUse = (err == EADDRINUSE)
+                            summary = err == EADDRINUSE
+                                ? "BUSY — Port :\(port) on iPhone is already used by another app/proxy"
+                                : "Bind check failed (errno=\(err))"
+                        }
+                        Darwin.close(fd)
+                    }
+                }
+            } else {
+                // Outbound TCP probe to custom PC IP:port
+                let t0 = CACurrentMediaTime()
+                let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+                if fd < 0 {
+                    summary = "Socket error (errno=\(errno))"
+                } else {
+                    let flags = fcntl(fd, F_GETFL, 0)
+                    _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+                    var addr = sockaddr_in()
+                    addr.sin_family = sa_family_t(AF_INET)
+                    addr.sin_port = port.bigEndian
+                    if inet_pton(AF_INET, host, &addr.sin_addr) <= 0 {
+                        summary = "Invalid IPv4 address: \(host)"
+                    } else {
+                        let rc = withUnsafePointer(to: &addr) {
+                            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                                Darwin.connect(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+                            }
+                        }
+                        if rc == 0 {
+                            ok = true
+                            let rtt = (CACurrentMediaTime() - t0) * 1000.0
+                            summary = String(format: "CONNECTED — %@:%d reachable (%.1f ms)", host, port, rtt)
+                        } else if errno == EINPROGRESS {
+                            var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                            let pr = poll(&pfd, 1, 1500)
+                            if pr > 0 {
+                                var soErr: Int32 = 0
+                                var len = socklen_t(MemoryLayout<Int32>.size)
+                                getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &len)
+                                if soErr == 0 {
+                                    ok = true
+                                    let rtt = (CACurrentMediaTime() - t0) * 1000.0
+                                    summary = String(format: "REACHABLE — %@:%d responded (%.1f ms)", host, port, rtt)
+                                } else {
+                                    summary = "REFUSED/ERROR — \(host):\(port) (\(String(cString: strerror(soErr))))"
+                                }
+                            } else {
+                                summary = "TIMEOUT — \(host):\(port) did not respond in 1.5s"
+                            }
+                        } else {
+                            summary = "CONNECT ERROR — \(host):\(port) (\(String(cString: strerror(errno))))"
+                        }
+                    }
+                    Darwin.close(fd)
+                }
+            }
+
+                let ifaceDetails = self.describeLocalInterfaces()
+                DispatchQueue.main.async {
+                    self.emitLog("Endpoint test [\(host):\(port)]: \(summary)")
+                    if !ifaceDetails.isEmpty {
+                        self.emitLog("iPhone interfaces: \(ifaceDetails)")
+                    }
+                    result([
+                        "ok": ok,
+                        "portInUse": portInUse,
+                        "summary": summary,
+                        "details": ifaceDetails
+                    ])
+                }
+            }
+        }
+    }
+
+    private func describeLocalInterfaces() -> String {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return "" }
+        defer { freeifaddrs(ifaddr) }
+        var parts: [String] = []
+        var ptr: UnsafeMutablePointer<ifaddrs>? = firstAddr
+        while let current = ptr {
+            let flags = Int32(current.pointee.ifa_flags)
+            let isUp = (flags & IFF_UP) != 0
+            let isLoopback = (flags & IFF_LOOPBACK) != 0
+            if isUp && !isLoopback, let addr = current.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
+                var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &hostBuf, socklen_t(hostBuf.count), nil, 0, NI_NUMERICHOST) == 0 {
+                    let name = String(cString: current.pointee.ifa_name)
+                    let ip = String(cString: hostBuf)
+                    parts.append("\(name)=\(ip)")
+                }
+            }
+            ptr = current.pointee.ifa_next
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func emitUsbStatus(_ status: String, peerName: String?, transport: String) {

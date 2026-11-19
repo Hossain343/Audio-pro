@@ -28,7 +28,7 @@ class AudioProWinBridge {
   explicit AudioProWinBridge(flutter::BinaryMessenger* messenger, HWND hwnd = nullptr);
   ~AudioProWinBridge();
 
-  void StartBridge(int port, const std::string& local_name);
+  void StartBridge(const std::string& bind_ip, int port, const std::string& local_name);
   void StopBridge();
   void DrainPendingEvents();
 
@@ -43,8 +43,13 @@ class AudioProWinBridge {
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
   flutter::EncodableList EnumerateWasapiEndpoints();
+  flutter::EncodableMap TestEndpointAvailability(const std::string& ip, int port);
   void AdbUsbWatcherLoop(int port);
-  void SocketServerLoop(int port, std::string local_name);
+  void UsbmuxdUsbWatcherLoop(int port, std::string local_name);
+  void SocketServerLoop(std::string bind_ip, int port, std::string local_name);
+  void RunBridgeSession(uintptr_t sock_handle, const std::string& local_name,
+                        const std::string& transport_hint);
+
   void EmitStatus(const std::string& status, const std::string& peer_name,
                   const std::string& transport);
   void EmitLog(const std::string& message);
@@ -64,6 +69,8 @@ class AudioProWinBridge {
   std::deque<PendingEvent> pending_events_;
 
   std::mutex config_mutex_;
+  std::string bind_ip_ = "0.0.0.0";
+  int active_port_ = 38900;
   std::string preferred_render_id_;
   std::string preferred_capture_id_;
   std::string virtual_mic_name_ = "AudioPro Virtual Mic";
@@ -73,6 +80,8 @@ class AudioProWinBridge {
   std::deque<int16_t> render_ring_;
 
   std::atomic<bool> running_{false};
+  std::atomic<bool> listener_active_{false};
+  std::atomic<bool> session_busy_{false};
   std::atomic<bool> input_muted_{false};
   std::atomic<bool> loopback_enabled_{true};
   std::atomic<float> output_gain_{0.85f};
@@ -80,6 +89,7 @@ class AudioProWinBridge {
   std::atomic<double> latest_output_rms_{0.0};
 
   std::thread adb_thread_;
+  std::thread usbmux_thread_;
   std::thread server_thread_;
 };
 

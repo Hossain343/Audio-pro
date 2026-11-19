@@ -30,7 +30,10 @@ class AudioBridgeController extends ChangeNotifier {
 
   String virtualMicName = 'AudioPro Virtual Mic';
   String virtualSpkName = 'AudioPro Virtual Speaker';
-  String hostAddress = '127.0.0.1';
+  String hostAddress =
+      (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS))
+          ? '0.0.0.0'
+          : '127.0.0.1';
   int port = 38900;
 
   double outputVolume = 0.85;
@@ -39,6 +42,9 @@ class AudioBridgeController extends ChangeNotifier {
   bool autoConnectEnabled = true;
   bool loopbackEnabled = true;
   bool testToneEnabled = false;
+
+  EndpointTestResult? endpointTestResult;
+  bool isTestingEndpoint = false;
 
   /// Dedicated ValueNotifier so high-frequency VU updates never rebuild the
   /// entire screen tree (prevents scroll/tap lag on iOS and Android).
@@ -345,15 +351,48 @@ class AudioBridgeController extends ChangeNotifier {
 
   Future<void> updateTargetEndpoint(String host, int newPort) async {
     final cleanHost = host.trim();
-    hostAddress = cleanHost.isEmpty ? '127.0.0.1' : cleanHost;
+    hostAddress = cleanHost.isEmpty
+        ? (isDesktopHost ? '0.0.0.0' : '127.0.0.1')
+        : cleanHost;
     port = newPort.clamp(1024, 65535);
-    addLog('BRIDGE', 'Target endpoint set to $hostAddress:$port');
+    addLog('BRIDGE', 'Endpoint configured: $hostAddress:$port');
     notifyListeners();
     if (status != BridgeConnectionStatus.disconnected) {
       await disconnectBridge();
       await connectBridge();
     } else if (autoConnectEnabled) {
       await connectBridge();
+    }
+  }
+
+  Future<void> testTargetEndpoint(String host, int testPort) async {
+    if (isTestingEndpoint) return;
+    final cleanHost = host.trim();
+    final effectiveHost = cleanHost.isEmpty
+        ? (isDesktopHost ? '0.0.0.0' : '127.0.0.1')
+        : cleanHost;
+    final effectivePort = testPort.clamp(1024, 65535);
+
+    isTestingEndpoint = true;
+    notifyListeners();
+
+    try {
+      final res = await _bridge.testEndpoint(
+        host: effectiveHost,
+        port: effectivePort,
+      );
+      endpointTestResult = res;
+      addLog('TEST', '${res.summary}${res.details.isNotEmpty ? " | ${res.details}" : ""}');
+    } catch (e) {
+      endpointTestResult = EndpointTestResult(
+        ok: false,
+        portInUse: false,
+        summary: 'Test failed: $e',
+      );
+      addLog('TEST-ERR', e.toString());
+    } finally {
+      isTestingEndpoint = false;
+      notifyListeners();
     }
   }
 
