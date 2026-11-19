@@ -65,6 +65,11 @@ jobs:
         run: |
           flutter create /tmp/scaffold --org com.audiopro --project-name audio_pro --platforms=android
           cp -rn /tmp/scaffold/android/* android/ || true
+          cp -f /tmp/scaffold/android/gradle/wrapper/gradle-wrapper.properties android/gradle/wrapper/gradle-wrapper.properties
+          cp -f /tmp/scaffold/android/settings.gradle.kts android/settings.gradle.kts
+          cp -f /tmp/scaffold/android/build.gradle.kts android/build.gradle.kts
+          cp -f /tmp/scaffold/android/app/build.gradle.kts android/app/build.gradle.kts
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/' android/app/build.gradle.kts
           chmod +x android/gradlew || true
           flutter pub get
 
