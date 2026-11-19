@@ -1,20 +1,28 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../../core/audio_device.dart';
 import '../theme/cyber_theme.dart';
 
 /// Real-time animated VU bar & dynamic waveform levelizer driven by native RMS/Peak audio.
+/// Uses CustomPainter's repaint listenable + RepaintBoundary so animations run smoothly
+/// without triggering widget tree rebuilds or starving touch/scroll handling.
 class VuMeterWaveform extends StatefulWidget {
   const VuMeterWaveform({
     super.key,
-    required this.rms,
-    required this.peak,
+    this.vuListenable,
+    this.useOutputLevel = false,
+    this.rms = 0.0,
+    this.peak = 0.0,
     required this.isMuted,
     this.label,
     this.barCount = 28,
     this.height = 68,
   });
 
+  final ValueListenable<AudioVuSnapshot>? vuListenable;
+  final bool useOutputLevel;
   final double rms;
   final double peak;
   final bool isMuted;
@@ -29,20 +37,32 @@ class VuMeterWaveform extends StatefulWidget {
 class _VuMeterWaveformState extends State<VuMeterWaveform>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ticker;
-  double _phase = 0;
+  late Listenable _repaintListenable;
 
   @override
   void initState() {
     super.initState();
     _ticker = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    )..addListener(() {
-        setState(() {
-          _phase += 0.16;
-        });
-      });
+      duration: const Duration(milliseconds: 1200),
+    );
+    _updateRepaintListenable();
     unawaited(_ticker.repeat());
+  }
+
+  @override
+  void didUpdateWidget(covariant VuMeterWaveform oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.vuListenable != widget.vuListenable) {
+      _updateRepaintListenable();
+    }
+  }
+
+  void _updateRepaintListenable() {
+    final vu = widget.vuListenable;
+    _repaintListenable = vu != null
+        ? Listenable.merge(<Listenable>[_ticker, vu])
+        : _ticker;
   }
 
   @override
@@ -51,18 +71,26 @@ class _VuMeterWaveformState extends State<VuMeterWaveform>
     super.dispose();
   }
 
-  String _formatDbfs() {
+  String _formatDbfs(double rawRms) {
     if (widget.isMuted) return 'MUTED';
-    if (widget.rms <= 0.0001) return '-96.0 dBFS';
-    final db = 20.0 * (math.log(widget.rms) / math.ln10);
+    if (rawRms <= 0.0001) return '-96.0 dBFS';
+    final db = 20.0 * (math.log(rawRms) / math.ln10);
     return '${db.clamp(-96.0, 0.0).toStringAsFixed(1)} dBFS';
+  }
+
+  Widget _buildDbfsText(double rawRms) {
+    return Text(
+      _formatDbfs(rawRms),
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        color: widget.isMuted ? CyberTheme.crimsonOff : CyberTheme.cyanAccent,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final effectiveRms = widget.isMuted ? 0.0 : widget.rms;
-    final effectivePeak = widget.isMuted ? 0.0 : widget.peak;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -79,30 +107,37 @@ class _VuMeterWaveformState extends State<VuMeterWaveform>
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              Text(
-                _formatDbfs(),
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: widget.isMuted
-                      ? CyberTheme.crimsonOff
-                      : CyberTheme.cyanAccent,
-                ),
-              ),
+              if (widget.vuListenable != null)
+                ValueListenableBuilder<AudioVuSnapshot>(
+                  valueListenable: widget.vuListenable!,
+                  builder: (context, snapshot, _) {
+                    final activeRms = widget.useOutputLevel
+                        ? snapshot.outputRms
+                        : snapshot.inputRms;
+                    return _buildDbfsText(activeRms);
+                  },
+                )
+              else
+                _buildDbfsText(widget.rms),
             ],
           ),
           const SizedBox(height: 6),
         ],
-        SizedBox(
-          height: widget.height,
-          width: double.infinity,
-          child: CustomPaint(
-            painter: _VuWaveformPainter(
-              rms: effectiveRms,
-              peak: effectivePeak,
-              phase: _phase,
-              barCount: widget.barCount,
-              isMuted: widget.isMuted,
+        RepaintBoundary(
+          child: SizedBox(
+            height: widget.height,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _VuWaveformPainter(
+                repaint: _repaintListenable,
+                ticker: _ticker,
+                vuListenable: widget.vuListenable,
+                useOutputLevel: widget.useOutputLevel,
+                fallbackRms: widget.rms,
+                fallbackPeak: widget.peak,
+                barCount: widget.barCount,
+                isMuted: widget.isMuted,
+              ),
             ),
           ),
         ),
@@ -113,21 +148,38 @@ class _VuMeterWaveformState extends State<VuMeterWaveform>
 
 class _VuWaveformPainter extends CustomPainter {
   _VuWaveformPainter({
-    required this.rms,
-    required this.peak,
-    required this.phase,
+    required Listenable repaint,
+    required this.ticker,
+    required this.vuListenable,
+    required this.useOutputLevel,
+    required this.fallbackRms,
+    required this.fallbackPeak,
     required this.barCount,
     required this.isMuted,
-  });
+  }) : super(repaint: repaint);
 
-  final double rms;
-  final double peak;
-  final double phase;
+  final Animation<double> ticker;
+  final ValueListenable<AudioVuSnapshot>? vuListenable;
+  final bool useOutputLevel;
+  final double fallbackRms;
+  final double fallbackPeak;
   final int barCount;
   final bool isMuted;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final snapshot = vuListenable?.value;
+    final double rawRms = snapshot != null
+        ? (useOutputLevel ? snapshot.outputRms : snapshot.inputRms)
+        : fallbackRms;
+    final double rawPeak = snapshot != null
+        ? (useOutputLevel ? snapshot.outputRms : snapshot.inputPeak)
+        : fallbackPeak;
+
+    final rms = isMuted ? 0.0 : rawRms;
+    final peak = isMuted ? 0.0 : rawPeak;
+    final phase = ticker.value * math.pi * 2.0;
+
     const barSpacing = 4.0;
     final totalSpacing = barSpacing * (barCount - 1);
     final barWidth = ((size.width - totalSpacing) / barCount).clamp(2.0, 14.0);
@@ -171,9 +223,11 @@ class _VuWaveformPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _VuWaveformPainter oldDelegate) {
-    return oldDelegate.rms != rms ||
-        oldDelegate.peak != peak ||
-        oldDelegate.phase != phase ||
+    return oldDelegate.vuListenable != vuListenable ||
+        oldDelegate.useOutputLevel != useOutputLevel ||
+        oldDelegate.fallbackRms != fallbackRms ||
+        oldDelegate.fallbackPeak != fallbackPeak ||
+        oldDelegate.barCount != barCount ||
         oldDelegate.isMuted != isMuted;
   }
 }

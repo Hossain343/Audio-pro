@@ -65,6 +65,7 @@ jobs:
         run: |
           flutter create /tmp/scaffold --org com.audiopro --project-name audio_pro --platforms=android
           cp -rn /tmp/scaffold/android/* android/ || true
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26 android/app/src/main/res/drawable*/ic_launcher*
           cp -f /tmp/scaffold/android/gradle/wrapper/gradle-wrapper.properties android/gradle/wrapper/gradle-wrapper.properties
           cp -f /tmp/scaffold/android/settings.gradle.kts android/settings.gradle.kts
           cp -f /tmp/scaffold/android/build.gradle.kts android/build.gradle.kts

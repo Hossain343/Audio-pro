@@ -54,12 +54,17 @@ async function startServer() {
       const relPaths = walkRepoFiles(REPO_ROOT, REPO_ROOT);
       const files: RepoFileEntry[] = relPaths.map((rel) => {
         const full = path.join(REPO_ROOT, rel);
-        const content = fs.readFileSync(full, 'utf8');
+        const ext = path.extname(rel).toLowerCase();
+        const isBinary = ['.png', '.ico', '.jpg', '.jpeg', '.webp', '.jar', '.zip'].includes(ext);
+        const stat = fs.statSync(full);
+        const content = isBinary
+          ? `[Binary asset: ${rel} (${stat.size} bytes)]`
+          : fs.readFileSync(full, 'utf8');
         return {
           path: `audio_pro/${rel}`,
           category: classifyPath(rel),
-          sizeBytes: Buffer.byteLength(content, 'utf8'),
-          lines: content.split('\n').length,
+          sizeBytes: stat.size,
+          lines: isBinary ? 1 : content.split('\n').length,
           content,
         };
       });

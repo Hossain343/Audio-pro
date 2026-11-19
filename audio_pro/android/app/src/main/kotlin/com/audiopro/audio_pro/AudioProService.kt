@@ -141,14 +141,17 @@ class AudioProService : Service() {
                 hostIdx++
                 var socket: Socket? = null
                 try {
+                    emitLog("Probing $targetHost:$port...")
                     emitStatus("connecting", null, "USB Probe ($targetHost:$port)")
                     socket = Socket()
                     socket.tcpNoDelay = true
                     socket.trafficClass = 0x10 // IPTOS_LOWDELAY
                     socket.connect(InetSocketAddress(targetHost, port), 1500)
 
+                    emitLog("TCP connected to $targetHost:$port")
                     streamFullDuplexAudio(socket, deviceName)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    emitLog("Connect $targetHost:$port failed: ${e.javaClass.simpleName}: ${e.message ?: "error"}")
                     emitStatus("disconnected", null, "USB Disconnected")
                     try {
                         Thread.sleep(1200)
@@ -238,6 +241,7 @@ class AudioProService : Service() {
 
         recorder.startRecording()
         track.play()
+        emitLog("AudioRecord & AudioTrack started (48kHz/240-sample frames)")
 
         updateNotification("Connected via USB · 48kHz Low-Latency")
         emitStatus("connected", "WINDOWS-PC", "USB ADB Tunnel")
@@ -260,9 +264,11 @@ class AudioProService : Service() {
 
                     if (type == 1) { // handshakeAck
                         val meta = JSONObject(String(payload, 0, len, Charsets.UTF_8))
+                        val peer = meta.optString("deviceName", "WINDOWS-PC")
+                        emitLog("APRO handshake ACK from $peer")
                         emitStatus(
                             "connected",
-                            meta.optString("deviceName", "WINDOWS-PC"),
+                            peer,
                             "USB ADB Tunnel"
                         )
                     } else if (type == 3) { // speakerPcm
@@ -321,7 +327,7 @@ class AudioProService : Service() {
                     ppsCount = 0
                     lastRateMs = now
                 }
-                if (now - lastVuPushMs >= 33) {
+                if (now - lastVuPushMs >= 66) {
                     lastVuPushMs = now
                     emitVu(lastInputRms, lastInputPeak, lastOutputRms, measuredPps)
                 }
@@ -402,6 +408,18 @@ class AudioProService : Service() {
                     "status" to status,
                     "peerName" to (peerName ?: "WINDOWS-HOST"),
                     "transport" to transport
+                )
+            )
+        }
+    }
+
+    private fun emitLog(message: String) {
+        mainHandler.post {
+            usbSink?.success(
+                mapOf(
+                    "status" to "log",
+                    "source" to "ANDROID-KT",
+                    "message" to message
                 )
             )
         }

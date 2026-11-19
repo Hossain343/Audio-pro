@@ -4,7 +4,6 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <winsock2.h>
 #include <windows.h>
 
 #include <flutter/binary_messenger.h>
@@ -48,6 +47,7 @@ class AudioProWinBridge {
   void SocketServerLoop(int port, std::string local_name);
   void EmitStatus(const std::string& status, const std::string& peer_name,
                   const std::string& transport);
+  void EmitLog(const std::string& message);
   void EmitVu(double in_rms, double in_peak, double out_rms, double jitter_ms, int pps);
   void EnqueueEvent(bool is_vu, flutter::EncodableMap map);
 

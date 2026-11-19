@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/audio_device.dart';
 import '../../services/audio_bridge_controller.dart';
 import '../theme/cyber_theme.dart';
+import '../widgets/diagnostic_log_card.dart';
 import '../widgets/vu_meter_waveform.dart';
 
 class MobileTransmitterScreen extends StatefulWidget {
@@ -14,7 +15,8 @@ class MobileTransmitterScreen extends StatefulWidget {
   final AudioBridgeController controller;
 
   @override
-  State<MobileTransmitterScreen> createState() => _MobileTransmitterScreenState();
+  State<MobileTransmitterScreen> createState() =>
+      _MobileTransmitterScreenState();
 }
 
 class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
@@ -24,7 +26,9 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
   @override
   void initState() {
     super.initState();
-    _hostController = TextEditingController(text: widget.controller.hostAddress);
+    _hostController = TextEditingController(
+      text: widget.controller.hostAddress,
+    );
     _portController = TextEditingController(
       text: widget.controller.port.toString(),
     );
@@ -38,6 +42,7 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
   }
 
   Future<void> _applyEndpoint() async {
+    FocusScope.of(context).unfocus();
     final parsedPort = int.tryParse(_portController.text.trim()) ?? 38900;
     await widget.controller.updateTargetEndpoint(
       _hostController.text,
@@ -58,9 +63,9 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
           BridgeConnectionStatus.disconnected => CyberTheme.crimsonOff,
         };
         final statusText = switch (controller.status) {
-          BridgeConnectionStatus.connected => 'Connected via USB',
-          BridgeConnectionStatus.connecting => 'Connecting (USB Handshake)...',
-          BridgeConnectionStatus.disconnected => 'Disconnected · Waiting for USB',
+          BridgeConnectionStatus.connected => 'Connected',
+          BridgeConnectionStatus.connecting => 'Probing / Connecting...',
+          BridgeConnectionStatus.disconnected => 'Disconnected · Waiting',
         };
 
         return Scaffold(
@@ -77,7 +82,7 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
               TextButton.icon(
                 onPressed: controller.status == BridgeConnectionStatus.connected
                     ? controller.disconnectBridge
-                    : controller.connectBridge,
+                    : () => unawaited(controller.connectBridge()),
                 icon: Icon(
                   controller.status == BridgeConnectionStatus.connected
                       ? Icons.usb_off_rounded
@@ -96,6 +101,7 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
           ),
           body: SafeArea(
             child: ListView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.all(16),
               children: <Widget>[
                 // Desktop Host Status Card
@@ -154,14 +160,19 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        '${controller.peerInfo.transportLabel} · '
-                        '${controller.vuSnapshot.latencyMs.toStringAsFixed(1)} ms latency · '
-                        '${controller.peerInfo.sampleRateHz} Hz PCM',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: CyberTheme.textSecondary,
-                        ),
+                      ValueListenableBuilder<AudioVuSnapshot>(
+                        valueListenable: controller.vuNotifier,
+                        builder: (context, vu, _) {
+                          return Text(
+                            '${controller.peerInfo.transportLabel} · '
+                            '${vu.latencyMs.toStringAsFixed(1)} ms latency · '
+                            '${controller.peerInfo.sampleRateHz} Hz PCM',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: CyberTheme.textSecondary,
+                            ),
+                          );
+                        },
                       ),
                       const SizedBox(height: 12),
                       SwitchListTile(
@@ -172,7 +183,8 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                           style: TextStyle(fontSize: 13),
                         ),
                         value: controller.autoConnectEnabled,
-                        onChanged: (v) => unawaited(controller.setAutoConnect(v)),
+                        onChanged: (v) =>
+                            unawaited(controller.setAutoConnect(v)),
                       ),
                       const SizedBox(height: 6),
                       Row(
@@ -258,7 +270,9 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                             children: <Widget>[
                               TextButton.icon(
                                 onPressed: () => unawaited(
-                                  controller.toggleTestTone(!controller.testToneEnabled),
+                                  controller.toggleTestTone(
+                                    !controller.testToneEnabled,
+                                  ),
                                 ),
                                 icon: Icon(
                                   controller.testToneEnabled
@@ -270,7 +284,9 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                                       : CyberTheme.cyanAccent,
                                 ),
                                 label: Text(
-                                  controller.testToneEnabled ? 'Test Tone' : 'Live Mic',
+                                  controller.testToneEnabled
+                                      ? 'Test Tone'
+                                      : 'Live Mic',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: controller.testToneEnabled
@@ -289,7 +305,8 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                                       ? CyberTheme.crimsonOff
                                       : CyberTheme.cyanAccent,
                                 ),
-                                tooltip: controller.isInputMuted ? 'Unmute' : 'Mute',
+                                tooltip:
+                                    controller.isInputMuted ? 'Unmute' : 'Mute',
                               ),
                             ],
                           ),
@@ -343,8 +360,7 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                       const SizedBox(height: 16),
                       VuMeterWaveform(
                         label: 'Mic Input Levelizer',
-                        rms: controller.vuSnapshot.inputRms,
-                        peak: controller.vuSnapshot.inputPeak,
+                        vuListenable: controller.vuNotifier,
                         isMuted: controller.isInputMuted,
                       ),
                     ],
@@ -374,7 +390,8 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        controller.selectedOutput?.name ?? 'Phone Speaker / Earbuds',
+                        controller.selectedOutput?.name ??
+                            'Phone Speaker / Earbuds',
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -443,16 +460,21 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                         value: controller.outputVolume,
                         onChanged: controller.updateOutputVolume,
                       ),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: controller.vuSnapshot.outputRms,
-                          minHeight: 6,
-                          backgroundColor: Colors.white10,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                            CyberTheme.emeraldOk,
-                          ),
-                        ),
+                      ValueListenableBuilder<AudioVuSnapshot>(
+                        valueListenable: controller.vuNotifier,
+                        builder: (context, vu, _) {
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: vu.outputRms,
+                              minHeight: 6,
+                              backgroundColor: Colors.white10,
+                              valueColor: const AlwaysStoppedAnimation<Color>(
+                                CyberTheme.emeraldOk,
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -472,10 +494,18 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                   ),
                   subtitle: const Text(
                     'Keep low-latency USB audio streaming when screen locks or app minimizes.',
-                    style: TextStyle(fontSize: 12, color: CyberTheme.textSecondary),
+                    style:
+                        TextStyle(fontSize: 12, color: CyberTheme.textSecondary),
                   ),
                   value: controller.isBackgroundLockActive,
                   onChanged: controller.toggleBackgroundLock,
+                ),
+                const SizedBox(height: 16),
+
+                // Temporary Live Diagnostic Log Viewer
+                DiagnosticLogCard(
+                  controller: controller,
+                  boxHeight: 190,
                 ),
               ],
             ),

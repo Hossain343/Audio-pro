@@ -1,6 +1,12 @@
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+
 #include "audio_pro_bridge.h"
 
-#include <ws2tcpip.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <mmreg.h>
@@ -11,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -174,6 +181,7 @@ AudioProWinBridge::AudioProWinBridge(flutter::BinaryMessenger* messenger, HWND h
             usb_sink_.reset();
             return nullptr;
           }));
+  EmitLog("Windows AudioProWinBridge initialized");
 }
 
 AudioProWinBridge::~AudioProWinBridge() {
@@ -362,12 +370,16 @@ flutter::EncodableList AudioProWinBridge::EnumerateWasapiEndpoints() {
 void AudioProWinBridge::StartBridge(int port, const std::string& local_name) {
   StopBridge();
   running_.store(true);
+  EmitLog("Starting Windows bridge on TCP:" + std::to_string(port) +
+          " (host=" + local_name + ")");
   adb_thread_ = std::thread(&AudioProWinBridge::AdbUsbWatcherLoop, this, port);
   server_thread_ = std::thread(&AudioProWinBridge::SocketServerLoop, this, port, local_name);
 }
 
 void AudioProWinBridge::StopBridge() {
-  running_.store(false);
+  if (running_.exchange(false)) {
+    EmitLog("Stopping Windows bridge");
+  }
   if (adb_thread_.joinable()) adb_thread_.join();
   if (server_thread_.joinable()) server_thread_.join();
 }
@@ -381,6 +393,8 @@ void AudioProWinBridge::AdbUsbWatcherLoop(int port) {
       adb_path = "\"" + sdk_adb + "\"";
     }
   }
+  EmitLog("ADB USB watcher active (binary=" + adb_path + ")");
+  int last_adb_state = -999;
 
   while (running_.load()) {
     std::string cmd = adb_path + " reverse tcp:" + std::to_string(port) +
@@ -395,8 +409,23 @@ void AudioProWinBridge::AdbUsbWatcherLoop(int port) {
     if (CreateProcessA(nullptr, cmd_buf.data(), nullptr, nullptr, FALSE,
                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
       WaitForSingleObject(pi.hProcess, 1500);
+      DWORD exit_code = 1;
+      GetExitCodeProcess(pi.hProcess, &exit_code);
       CloseHandle(pi.hProcess);
       CloseHandle(pi.hThread);
+      int state_code = (exit_code == 0) ? 0 : 1;
+      if (state_code != last_adb_state) {
+        last_adb_state = state_code;
+        if (state_code == 0) {
+          EmitLog("adb reverse tcp:" + std::to_string(port) + " active (Android USB tunnel ready)");
+        } else {
+          EmitLog("adb reverse exited with code " + std::to_string(exit_code) +
+                  " (no Android USB device or debugging off)");
+        }
+      }
+    } else if (last_adb_state != -1) {
+      last_adb_state = -1;
+      EmitLog("adb.exe not found in PATH or Android SDK (iPhone/Wi-Fi/manual tunnel unaffected)");
     }
     for (int i = 0; i < 25 && running_.load(); i++) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -407,6 +436,7 @@ void AudioProWinBridge::AdbUsbWatcherLoop(int port) {
 void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
   SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (listen_sock == INVALID_SOCKET) {
+    EmitLog("Socket creation failed, WSA error=" + std::to_string(WSAGetLastError()));
     EmitStatus("disconnected", "Socket Init Failed", "Port Error");
     return;
   }
@@ -422,10 +452,15 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
 
   if (bind(listen_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR ||
       listen(listen_sock, 4) == SOCKET_ERROR) {
+    int err = WSAGetLastError();
     closesocket(listen_sock);
+    EmitLog("TCP bind/listen failed on port " + std::to_string(port) +
+            " WSA error=" + std::to_string(err));
     EmitStatus("disconnected", "Port Busy (" + std::to_string(port) + ")", "Bind Error");
     return;
   }
+
+  EmitLog("TCP server listening on 0.0.0.0:" + std::to_string(port));
 
   u_long non_block = 1;
   ioctlsocket(listen_sock, FIONBIO, &non_block);
@@ -433,8 +468,10 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
   while (running_.load()) {
     EmitStatus("connecting", "Awaiting USB Device...", "USB ADB / usbmuxd");
     SOCKET client = INVALID_SOCKET;
+    sockaddr_in peer_addr{};
+    int peer_len = sizeof(peer_addr);
     while (running_.load() && client == INVALID_SOCKET) {
-      client = accept(listen_sock, nullptr, nullptr);
+      client = accept(listen_sock, reinterpret_cast<sockaddr*>(&peer_addr), &peer_len);
       if (client == INVALID_SOCKET) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
       }
@@ -443,6 +480,11 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
       if (client != INVALID_SOCKET) closesocket(client);
       break;
     }
+
+    char ip_buf[INET_ADDRSTRLEN] = {0};
+    inet_ntop(AF_INET, &peer_addr.sin_addr, ip_buf, sizeof(ip_buf));
+    EmitLog("Client TCP connected from " + std::string(ip_buf) + ":" +
+            std::to_string(ntohs(peer_addr.sin_port)));
 
     u_long blocking = 0;
     ioctlsocket(client, FIONBIO, &blocking);
@@ -467,6 +509,7 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
     SendAproPacket(client, send_mutex, 1, 1, 0,
                    reinterpret_cast<const uint8_t*>(ack_json.data()),
                    static_cast<uint16_t>(ack_json.size()));
+    EmitLog("Sent APRO handshake ACK to client");
     EmitStatus("connected", "Mobile USB Device", "USB Tunnel");
 
     // TX Thread: Captures Windows system audio via WASAPI Loopback + Test Pulse -> Phone
@@ -496,7 +539,13 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
                                                   reinterpret_cast<void**>(&capture_client))) &&
             SUCCEEDED(loopback_client->Start())) {
           loopback_ready = true;
+          EmitLog("WASAPI loopback started (" + std::to_string(mix_fmt->nSamplesPerSec) +
+                  " Hz, " + std::to_string(mix_fmt->nChannels) + " ch)");
+        } else {
+          EmitLog("WASAPI loopback Initialize/Start failed");
         }
+      } else {
+        EmitLog("WASAPI loopback default render endpoint unavailable");
       }
 
       std::vector<int16_t> out_accum;
@@ -662,8 +711,11 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
                 SUCCEEDED(render_client->GetService(__uuidof(IAudioRenderClient),
                                                     reinterpret_cast<void**>(&audio_render))) &&
                 SUCCEEDED(render_client->Start())) {
-              // Ready
+              EmitLog("WASAPI bridge render endpoint active (" +
+                      std::to_string(mix_fmt->nSamplesPerSec) + " Hz, " +
+                      std::to_string(mix_fmt->nChannels) + " ch)");
             } else {
+              EmitLog("WASAPI bridge render endpoint failed to start");
               closeRender();
             }
           }
@@ -752,6 +804,7 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
         std::string platform = ExtractJsonStringField(json, "platform");
         if (phone_name.empty()) phone_name = "Mobile USB Device";
         std::string transport = platform.empty() ? "USB Tunnel" : ("USB · " + platform);
+        EmitLog("Handshake received: peer=" + phone_name + " platform=" + platform);
         EmitStatus("connected", phone_name, transport);
       } else if (type == 2) {  // micPcm from phone
         pps_counter++;
@@ -793,6 +846,7 @@ void AudioProWinBridge::SocketServerLoop(int port, std::string local_name) {
     if (render_thread.joinable()) render_thread.join();
     if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
     closesocket(client);
+    EmitLog("Client session ended; returning to listen state");
     EmitStatus("disconnected", "Awaiting USB Device...", "USB Disconnected");
   }
 
@@ -842,6 +896,14 @@ void AudioProWinBridge::EmitStatus(const std::string& status, const std::string&
   map[flutter::EncodableValue("status")] = flutter::EncodableValue(status);
   map[flutter::EncodableValue("peerName")] = flutter::EncodableValue(peer_name);
   map[flutter::EncodableValue("transport")] = flutter::EncodableValue(transport);
+  EnqueueEvent(false, std::move(map));
+}
+
+void AudioProWinBridge::EmitLog(const std::string& message) {
+  flutter::EncodableMap map;
+  map[flutter::EncodableValue("status")] = flutter::EncodableValue("log");
+  map[flutter::EncodableValue("source")] = flutter::EncodableValue("WIN-C++");
+  map[flutter::EncodableValue("message")] = flutter::EncodableValue(message);
   EnqueueEvent(false, std::move(map));
 }
 

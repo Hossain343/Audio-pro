@@ -40,17 +40,56 @@ class AudioBridgeController extends ChangeNotifier {
   bool loopbackEnabled = true;
   bool testToneEnabled = false;
 
-  AudioVuSnapshot vuSnapshot = AudioVuSnapshot.zero;
+  /// Dedicated ValueNotifier so high-frequency VU updates never rebuild the
+  /// entire screen tree (prevents scroll/tap lag on iOS and Android).
+  final ValueNotifier<AudioVuSnapshot> vuNotifier =
+      ValueNotifier<AudioVuSnapshot>(AudioVuSnapshot.zero);
+
+  /// Live diagnostic log stream for native + Dart troubleshooting.
+  final ValueNotifier<List<String>> logNotifier =
+      ValueNotifier<List<String>>(const <String>[]);
+
+  AudioVuSnapshot get vuSnapshot => vuNotifier.value;
   String? lastError;
 
   bool get isDesktopHost =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
+  void addLog(String source, String message) {
+    final now = DateTime.now();
+    final hh = now.hour.toString().padLeft(2, '0');
+    final mm = now.minute.toString().padLeft(2, '0');
+    final ss = now.second.toString().padLeft(2, '0');
+    final ms = now.millisecond.toString().padLeft(3, '0');
+    final line = '[$hh:$mm:$ss.$ms] [$source] $message';
+    final next = <String>[...logNotifier.value, line];
+    if (next.length > 250) {
+      next.removeRange(0, next.length - 250);
+    }
+    logNotifier.value = List<String>.unmodifiable(next);
+  }
+
+  void clearLogs() {
+    logNotifier.value = const <String>[];
+  }
+
+  String exportLogsText() {
+    if (logNotifier.value.isEmpty) {
+      return '[AudioPro] No diagnostic logs recorded yet.';
+    }
+    return logNotifier.value.join('\n');
+  }
+
   Future<void> initialize() async {
+    addLog(
+      'APP',
+      'Initializing AudioPro (${Platform.operatingSystem}, desktop=$isDesktopHost)',
+    );
     try {
       localDeviceName = await _bridge.getLocalDeviceName();
-    } catch (_) {
-      // Keep default fallback
+      addLog('APP', 'Local device name: $localDeviceName');
+    } catch (e) {
+      addLog('APP', 'getLocalDeviceName fallback ($e)');
     }
 
     if (!isDesktopHost) {
@@ -60,11 +99,11 @@ class AudioBridgeController extends ChangeNotifier {
     unawaited(_vuSub?.cancel());
     _vuSub = _bridge.vuSnapshots.listen(
       (snapshot) {
-        vuSnapshot = snapshot;
-        notifyListeners();
+        vuNotifier.value = snapshot;
       },
       onError: (Object err) {
         lastError = err.toString();
+        addLog('VU-ERR', err.toString());
         notifyListeners();
       },
     );
@@ -72,10 +111,20 @@ class AudioBridgeController extends ChangeNotifier {
     unawaited(_usbSub?.cancel());
     _usbSub = _bridge.usbEvents.listen((event) {
       final state = event['status']?.toString() ?? '';
+      if (state == 'log') {
+        final src = event['source']?.toString() ?? 'NATIVE';
+        final msg = event['message']?.toString() ?? '';
+        if (msg.isNotEmpty) {
+          addLog(src, msg);
+        }
+        return;
+      }
+
       final remoteName = event['peerName']?.toString();
       final transport = event['transport']?.toString();
 
       if (state == 'connected') {
+        final prevStatus = status;
         status = BridgeConnectionStatus.connected;
         peerInfo = PeerInfo(
           deviceName: remoteName ?? peerInfo.deviceName,
@@ -85,7 +134,11 @@ class AudioBridgeController extends ChangeNotifier {
           frameDurationMs: 5,
         );
         _reconnectTimer?.cancel();
+        if (prevStatus != BridgeConnectionStatus.connected) {
+          addLog('EVENT', 'Connected to ${peerInfo.deviceName} ($transport)');
+        }
       } else if (state == 'connecting') {
+        final prevStatus = status;
         status = BridgeConnectionStatus.connecting;
         if (transport != null && transport.isNotEmpty) {
           peerInfo = PeerInfo(
@@ -96,15 +149,24 @@ class AudioBridgeController extends ChangeNotifier {
             frameDurationMs: 5,
           );
         }
+        if (prevStatus != BridgeConnectionStatus.connecting) {
+          addLog('EVENT', 'Connecting: ${transport ?? "probing"}');
+        }
       } else if (state == 'disconnected') {
+        final prevStatus = status;
         status = BridgeConnectionStatus.disconnected;
-        vuSnapshot = AudioVuSnapshot.zero;
+        vuNotifier.value = AudioVuSnapshot.zero;
+        if (prevStatus != BridgeConnectionStatus.disconnected) {
+          addLog('EVENT', 'Disconnected (${transport ?? "closed"})');
+        }
         if (autoConnectEnabled) {
           _scheduleReconnect();
         }
       } else if (state == 'usb_attached' && autoConnectEnabled) {
+        addLog('EVENT', 'USB cable attached -> triggering connectBridge');
         unawaited(connectBridge());
       } else if (state == 'devices_changed') {
+        addLog('EVENT', 'Audio devices changed -> refreshing endpoints');
         unawaited(refreshEndpoints());
       }
       notifyListeners();
@@ -117,6 +179,12 @@ class AudioBridgeController extends ChangeNotifier {
         virtualSpkName: virtualSpkName,
       );
       await _bridge.setLoopbackEnabled(loopbackEnabled);
+    } else {
+      try {
+        await _bridge.setBackgroundLockEnabled(isBackgroundLockActive);
+      } catch (e) {
+        addLog('APP', 'setBackgroundLockEnabled error: $e');
+      }
     }
 
     if (autoConnectEnabled) {
@@ -131,9 +199,12 @@ class AudioBridgeController extends ChangeNotifier {
         if (Platform.isAndroid) Permission.bluetoothConnect else Permission.bluetooth,
         Permission.notification,
       ];
-      await permissions.request();
-    } catch (_) {
-      // Do not fail app startup if platform permission prompt throws
+      final statuses = await permissions.request();
+      for (final entry in statuses.entries) {
+        addLog('PERM', '${entry.key.toString().split('.').last}: ${entry.value.name}');
+      }
+    } catch (e) {
+      addLog('PERM', 'Permission request exception: $e');
     }
   }
 
@@ -159,22 +230,32 @@ class AudioBridgeController extends ChangeNotifier {
               )
             : null;
       }
+      addLog(
+        'AUDIO',
+        'Endpoints loaded: ${inputDevices.length} inputs, ${outputDevices.length} outputs',
+      );
       notifyListeners();
     } on PlatformException catch (e) {
       lastError = e.message;
+      addLog('AUDIO-ERR', 'listAudioEndpoints failed: ${e.message}');
       notifyListeners();
     }
   }
 
-  Future<void> connectBridge() async {
+  Future<void> connectBridge({bool isAutoRetry = false}) async {
     if (status == BridgeConnectionStatus.connecting) return;
     status = BridgeConnectionStatus.connecting;
     lastError = null;
     notifyListeners();
 
     try {
-      localDeviceName = await _bridge.getLocalDeviceName();
-      await _bridge.setBackgroundLockEnabled(isBackgroundLockActive);
+      if (!isAutoRetry) {
+        addLog(
+          'BRIDGE',
+          'connectBridge(host=$hostAddress, port=$port, hostMode=$isDesktopHost)',
+        );
+        await _bridge.setBackgroundLockEnabled(isBackgroundLockActive);
+      }
       final started = await _bridge.startBridge(
         isHostMode: isDesktopHost,
         localDeviceName: localDeviceName,
@@ -183,12 +264,14 @@ class AudioBridgeController extends ChangeNotifier {
       );
       if (!started && autoConnectEnabled) {
         status = BridgeConnectionStatus.disconnected;
+        addLog('BRIDGE', 'startBridge returned false -> scheduling retry');
         _scheduleReconnect();
         notifyListeners();
       }
     } on PlatformException catch (e) {
       status = BridgeConnectionStatus.disconnected;
       lastError = e.message ?? 'Bridge initialization failed';
+      addLog('BRIDGE-ERR', lastError!);
       if (autoConnectEnabled) {
         _scheduleReconnect();
       }
@@ -198,9 +281,10 @@ class AudioBridgeController extends ChangeNotifier {
 
   Future<void> disconnectBridge() async {
     _reconnectTimer?.cancel();
+    addLog('BRIDGE', 'disconnectBridge requested by user');
     await _bridge.stopBridge();
     status = BridgeConnectionStatus.disconnected;
-    vuSnapshot = AudioVuSnapshot.zero;
+    vuNotifier.value = AudioVuSnapshot.zero;
     notifyListeners();
   }
 
@@ -208,7 +292,7 @@ class AudioBridgeController extends ChangeNotifier {
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 2), () {
       if (status == BridgeConnectionStatus.disconnected && autoConnectEnabled) {
-        unawaited(connectBridge());
+        unawaited(connectBridge(isAutoRetry: true));
       }
     });
   }
@@ -221,6 +305,7 @@ class AudioBridgeController extends ChangeNotifier {
     final trimmedSpk = spkName.trim();
     virtualMicName = trimmedMic.isEmpty ? 'AudioPro Virtual Mic' : trimmedMic;
     virtualSpkName = trimmedSpk.isEmpty ? 'AudioPro Virtual Speaker' : trimmedSpk;
+    addLog('HOST', 'Virtual endpoints updated: mic="$virtualMicName" spk="$virtualSpkName"');
     notifyListeners();
     await _bridge.setVirtualEndpoints(
       virtualMicName: virtualMicName,
@@ -230,22 +315,26 @@ class AudioBridgeController extends ChangeNotifier {
 
   Future<void> toggleLoopback(bool enabled) async {
     loopbackEnabled = enabled;
+    addLog('HOST', 'WASAPI loopback ${enabled ? "enabled" : "disabled"}');
     notifyListeners();
     await _bridge.setLoopbackEnabled(enabled);
   }
 
   Future<void> triggerHostPulse() async {
+    addLog('HOST', 'Triggering 528Hz test pulse to mobile speaker');
     await _bridge.triggerHostPulse();
   }
 
   Future<void> toggleTestTone(bool enabled) async {
     testToneEnabled = enabled;
+    addLog('AUDIO', 'Mobile 440Hz test tone ${enabled ? "enabled" : "disabled"}');
     notifyListeners();
     await _bridge.setTestToneEnabled(enabled);
   }
 
   Future<void> setAutoConnect(bool enabled) async {
     autoConnectEnabled = enabled;
+    addLog('BRIDGE', 'Auto-connect ${enabled ? "enabled" : "disabled"}');
     if (!enabled) {
       _reconnectTimer?.cancel();
     } else if (status == BridgeConnectionStatus.disconnected) {
@@ -258,21 +347,26 @@ class AudioBridgeController extends ChangeNotifier {
     final cleanHost = host.trim();
     hostAddress = cleanHost.isEmpty ? '127.0.0.1' : cleanHost;
     port = newPort.clamp(1024, 65535);
+    addLog('BRIDGE', 'Target endpoint set to $hostAddress:$port');
     notifyListeners();
     if (status != BridgeConnectionStatus.disconnected) {
       await disconnectBridge();
+      await connectBridge();
+    } else if (autoConnectEnabled) {
       await connectBridge();
     }
   }
 
   Future<void> selectInputDevice(AudioEndpoint endpoint) async {
     selectedInput = endpoint;
+    addLog('AUDIO', 'Selected input: ${endpoint.name} (${endpoint.id})');
     notifyListeners();
     await _bridge.setInputDevice(endpoint.id);
   }
 
   Future<void> selectOutputDevice(AudioEndpoint endpoint) async {
     selectedOutput = endpoint;
+    addLog('AUDIO', 'Selected output: ${endpoint.name} (${endpoint.id})');
     notifyListeners();
     await _bridge.setOutputDevice(endpoint.id);
   }
@@ -285,12 +379,14 @@ class AudioBridgeController extends ChangeNotifier {
 
   Future<void> toggleInputMute() async {
     isInputMuted = !isInputMuted;
+    addLog('AUDIO', 'Input microphone ${isInputMuted ? "MUTED" : "UNMUTED"}');
     notifyListeners();
     await _bridge.setInputMuted(isInputMuted);
   }
 
   Future<void> toggleBackgroundLock(bool enabled) async {
     isBackgroundLockActive = enabled;
+    addLog('POWER', 'Background WakeLock ${enabled ? "enabled" : "disabled"}');
     notifyListeners();
     await _bridge.setBackgroundLockEnabled(enabled);
   }
@@ -300,6 +396,8 @@ class AudioBridgeController extends ChangeNotifier {
     _reconnectTimer?.cancel();
     unawaited(_vuSub?.cancel());
     unawaited(_usbSub?.cancel());
+    vuNotifier.dispose();
+    logNotifier.dispose();
     super.dispose();
   }
 }

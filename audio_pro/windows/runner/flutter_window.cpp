@@ -1,5 +1,6 @@
 #include "flutter_window.h"
 #include "flutter/generated_plugin_registrant.h"
+#include "resource.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -14,6 +15,7 @@ bool FlutterWindow::Create(const std::wstring& title, const POINT& origin,
   WNDCLASSW wc{};
   wc.lpfnWndProc = WndProc;
   wc.hInstance = GetModuleHandle(nullptr);
+  wc.hIcon = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
   wc.lpszClassName = L"FLUTTER_RUNNER_WIN32_WINDOW";
   RegisterClassW(&wc);
 

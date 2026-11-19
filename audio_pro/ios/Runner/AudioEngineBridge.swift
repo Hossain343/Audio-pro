@@ -32,6 +32,8 @@ final class AudioEngineBridge: NSObject {
     private var localDeviceName: String = UIDevice.current.name
 
     private var pcmAccumulator: [Int16] = []
+    private var pcmReadIndex: Int = 0
+    private var isAudioSessionConfigured = false
     private var latestOutputRms: Double = 0.0
     private var packetsSentThisSec: Int = 0
     private var lastRateCheckTime: CFTimeInterval = CACurrentMediaTime()
@@ -124,7 +126,7 @@ final class AudioEngineBridge: NSObject {
         case "setBackgroundLockEnabled":
             let args = call.arguments as? [String: Any]
             let enabled = (args?["enabled"] as? Bool) ?? true
-            if enabled {
+            if enabled && !isAudioSessionConfigured {
                 configureAudioSession()
             }
             result(nil)
@@ -136,7 +138,10 @@ final class AudioEngineBridge: NSObject {
     }
 
     @discardableResult
-    private func configureAudioSession() -> Bool {
+    private func configureAudioSession(force: Bool = false) -> Bool {
+        if isAudioSessionConfigured && !force {
+            return true
+        }
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(
@@ -147,8 +152,12 @@ final class AudioEngineBridge: NSObject {
             try session.setPreferredSampleRate(48000)
             try session.setPreferredIOBufferDuration(0.005)
             try session.setActive(true)
+            isAudioSessionConfigured = true
+            emitLog("AVAudioSession active (48kHz, 5ms IOBuffer)")
             return true
         } catch {
+            isAudioSessionConfigured = false
+            emitLog("AVAudioSession error: \(error.localizedDescription)")
             NSLog("AudioPro AVAudioSession error: \(error.localizedDescription)")
             return false
         }
@@ -265,6 +274,7 @@ final class AudioEngineBridge: NSObject {
 
     private func startBridge() {
         isRunning = true
+        emitLog("startBridge target=\(targetHost):\(targetPort) device=\(localDeviceName)")
 
         // Only initialize AVAudioEngine if not already running; never tear down audio during TCP retries.
         ensureAudioEngineStarted(retryCount: 0)
@@ -282,14 +292,18 @@ final class AudioEngineBridge: NSObject {
         case .granted:
             break
         case .undetermined:
+            emitLog("Record permission undetermined; requesting permission")
             session.requestRecordPermission { [weak self] granted in
                 DispatchQueue.main.async {
-                    guard let self = self, self.isRunning, granted else { return }
+                    guard let self = self else { return }
+                    self.emitLog("Record permission callback granted=\(granted)")
+                    guard self.isRunning, granted else { return }
                     self.ensureAudioEngineStarted(retryCount: retryCount)
                 }
             }
             return
         case .denied:
+            emitLog("Microphone permission DENIED; AVAudioEngine skipped")
             NSLog("AudioPro microphone permission denied; skipping AVAudioEngine capture")
             return
         @unknown default:
@@ -311,6 +325,7 @@ final class AudioEngineBridge: NSObject {
         let hwFormat = inputNode.outputFormat(forBus: 0)
 
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+            emitLog("Invalid hwFormat (\(hwFormat.sampleRate) Hz, \(hwFormat.channelCount) ch), retry=\(retryCount)")
             NSLog("AudioPro invalid input hardware format (\(hwFormat.sampleRate) Hz, \(hwFormat.channelCount) ch)")
             if retryCount < 3 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
@@ -371,8 +386,10 @@ final class AudioEngineBridge: NSObject {
             try engine.start()
             if engine.isRunning {
                 playerNode.play()
+                emitLog("AVAudioEngine started (hw=\(Int(hwFormat.sampleRate))Hz/\(hwFormat.channelCount)ch)")
             }
         } catch {
+            emitLog("AVAudioEngine start failed: \(error.localizedDescription)")
             NSLog("AudioPro AVAudioEngine start failed: \(error.localizedDescription)")
         }
     }
@@ -404,17 +421,21 @@ final class AudioEngineBridge: NSObject {
 
         let rms = count > 0 ? min(1.0, sqrt(sumSq / Double(count))) : 0.0
 
-        // Drain exact 240-sample (5ms) packets
-        while pcmAccumulator.count >= 240 {
-            let chunk = Array(pcmAccumulator[0..<240])
-            pcmAccumulator.removeFirst(240)
+        // Drain exact 240-sample (5ms) packets using O(1) read cursor
+        while pcmAccumulator.count - pcmReadIndex >= 240 {
+            let endIdx = pcmReadIndex + 240
             var leBytes = Data(capacity: 480)
-            for s in chunk {
-                var little = s.littleEndian
+            for idx in pcmReadIndex..<endIdx {
+                var little = pcmAccumulator[idx].littleEndian
                 withUnsafeBytes(of: &little) { leBytes.append(contentsOf: $0) }
             }
+            pcmReadIndex = endIdx
             sendPacketOnAudioQueue(type: 2, channels: 1, payload: leBytes)
             packetsSentThisSec += 1
+        }
+        if pcmReadIndex >= 2400 {
+            pcmAccumulator.removeFirst(pcmReadIndex)
+            pcmReadIndex = 0
         }
 
         let now = CACurrentMediaTime()
@@ -424,10 +445,11 @@ final class AudioEngineBridge: NSObject {
             lastRateCheckTime = now
         }
 
-        if now - lastVuEmitTime >= 0.033 {
+        if now - lastVuEmitTime >= 0.066 {
             lastVuEmitTime = now
             let outRms = latestOutputRms
-            latestOutputRms = max(0.0, latestOutputRms * 0.88)
+            latestOutputRms = max(0.0, latestOutputRms * 0.85)
+            let pps = measuredPps
             DispatchQueue.main.async {
                 self.vuSink?([
                     "inputRms": rms,
@@ -435,7 +457,7 @@ final class AudioEngineBridge: NSObject {
                     "outputRms": outRms,
                     "latencyMs": 22.0,
                     "jitterMs": 2.6,
-                    "packetsPerSecond": self.measuredPps,
+                    "packetsPerSecond": pps,
                     "packetLossPct": 0.0
                 ])
             }
@@ -465,6 +487,7 @@ final class AudioEngineBridge: NSObject {
                 guard let self = self, let conn = conn, self.connection === conn else { return }
                 switch state {
                 case .ready:
+                    self.emitLog("TCP ready -> \(host):\(port); sending APRO handshake")
                     self.emitUsbStatus("connected", peerName: "WINDOWS-HOST", transport: "USB usbmuxd / TCP")
                     let hello = [
                         "deviceName": deviceName,
@@ -477,13 +500,22 @@ final class AudioEngineBridge: NSObject {
                     }
                     self.receiveNextHeader(for: conn)
                 case .preparing:
+                    self.emitLog("Probing TCP \(host):\(port)...")
                     self.emitUsbStatus("connecting", peerName: nil, transport: "USB Probe (\(host):\(port))")
-                case .waiting(_):
+                case .waiting(let err):
+                    self.emitLog("TCP waiting/unreachable (\(host):\(port)): \(err.localizedDescription)")
                     self.emitUsbStatus("disconnected", peerName: nil, transport: "USB Host Unreachable")
                     conn.stateUpdateHandler = nil
                     conn.cancel()
                     self.connection = nil
-                case .failed(_), .cancelled:
+                case .failed(let err):
+                    self.emitLog("TCP failed (\(host):\(port)): \(err.localizedDescription)")
+                    self.emitUsbStatus("disconnected", peerName: nil, transport: "USB Disconnected")
+                    if self.connection === conn {
+                        self.connection = nil
+                    }
+                case .cancelled:
+                    self.emitLog("TCP connection cancelled")
                     self.emitUsbStatus("disconnected", peerName: nil, transport: "USB Disconnected")
                     if self.connection === conn {
                         self.connection = nil
@@ -629,12 +661,14 @@ final class AudioEngineBridge: NSObject {
         audioQueue.async { [weak self] in
             guard let self = self else { return }
             self.pcmAccumulator.removeAll(keepingCapacity: false)
+            self.pcmReadIndex = 0
             if let conn = self.connection {
                 conn.stateUpdateHandler = nil
                 conn.cancel()
                 self.connection = nil
             }
         }
+        emitLog("stopBridge called")
     }
 
     private func emitUsbStatus(_ status: String, peerName: String?, transport: String) {
@@ -647,9 +681,20 @@ final class AudioEngineBridge: NSObject {
         }
     }
 
+    private func emitLog(_ message: String) {
+        DispatchQueue.main.async {
+            self.usbSink?([
+                "status": "log",
+                "source": "IOS-SWIFT",
+                "message": message
+            ])
+        }
+    }
+
     @objc private func handleRouteChange(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.emitLog("AVAudioSession routeChanged")
             self.usbSink?(["status": "devices_changed"])
             if self.isRunning {
                 self.stopAudioEngine()
@@ -662,8 +707,12 @@ final class AudioEngineBridge: NSObject {
         guard let info = notification.userInfo,
               let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
-        if type == .ended && isRunning {
-            configureAudioSession()
+        if type == .began {
+            isAudioSessionConfigured = false
+            emitLog("AVAudioSession interruption began")
+        } else if type == .ended && isRunning {
+            emitLog("AVAudioSession interruption ended; restarting engine")
+            configureAudioSession(force: true)
             ensureAudioEngineStarted(retryCount: 0)
         }
     }
