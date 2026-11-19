@@ -1,5 +1,6 @@
 package com.audiopro.audio_pro
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -23,6 +24,7 @@ class MainActivity : FlutterActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var audioManager: AudioManager? = null
     private var usbReceiver: BroadcastReceiver? = null
+    private var audioDeviceCallback: AudioDeviceCallback? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -198,6 +200,7 @@ class MainActivity : FlutterActivity() {
         return true
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerUsbAndDeviceCallbacks() {
         if (usbReceiver == null) {
             usbReceiver = object : BroadcastReceiver() {
@@ -216,30 +219,36 @@ class MainActivity : FlutterActivity() {
             }
             val filter = IntentFilter("android.hardware.usb.action.USB_STATE")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(usbReceiver, filter, RECEIVER_NOT_EXPORTED)
+                registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
             } else {
                 registerReceiver(usbReceiver, filter)
             }
         }
 
-        audioManager?.registerAudioDeviceCallback(object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                mainHandler.post {
-                    AudioProService.usbSink?.success(mapOf("status" to "devices_changed"))
+        if (audioDeviceCallback == null) {
+            val callback = object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                    mainHandler.post {
+                        AudioProService.usbSink?.success(mapOf("status" to "devices_changed"))
+                    }
                 }
-            }
 
-            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                mainHandler.post {
-                    AudioProService.usbSink?.success(mapOf("status" to "devices_changed"))
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                    mainHandler.post {
+                        AudioProService.usbSink?.success(mapOf("status" to "devices_changed"))
+                    }
                 }
             }
-        }, mainHandler)
+            audioDeviceCallback = callback
+            audioManager?.registerAudioDeviceCallback(callback, mainHandler)
+        }
     }
 
     override fun onDestroy() {
         usbReceiver?.let { unregisterReceiver(it) }
         usbReceiver = null
+        audioDeviceCallback?.let { audioManager?.unregisterAudioDeviceCallback(it) }
+        audioDeviceCallback = null
         super.onDestroy()
     }
 }

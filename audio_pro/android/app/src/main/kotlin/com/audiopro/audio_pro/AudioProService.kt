@@ -52,6 +52,9 @@ class AudioProService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private var workerThread: Thread? = null
+    @Volatile private var lastInputRms = 0.0
+    @Volatile private var lastInputPeak = 0.0
+    @Volatile private var lastOutputRms = 0.0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -216,9 +219,9 @@ class AudioProService : Service() {
         preferredOutputDevice?.let { track.preferredDevice = it }
 
         val activeFlag = AtomicBoolean(true)
-        @Volatile var lastInputRms = 0.0
-        @Volatile var lastInputPeak = 0.0
-        @Volatile var lastOutputRms = 0.0
+        lastInputRms = 0.0
+        lastInputPeak = 0.0
+        lastOutputRms = 0.0
 
         recorder.startRecording()
         track.play()
@@ -306,11 +309,11 @@ class AudioProService : Service() {
         length: Int = payload.size
     ) {
         val frame = ByteBuffer.allocate(16 + length).order(ByteOrder.LITTLE_ENDIAN)
-        frame.put(0x41).put(0x50).put(0x52).put(0x4F) // APRO
-        frame.put(1) // version
+        frame.put(0x41.toByte()).put(0x50.toByte()).put(0x52.toByte()).put(0x4F.toByte()) // APRO
+        frame.put(1.toByte()) // version
         frame.put(type.toByte())
         frame.put((channels and 0x0F).toByte())
-        frame.put(0)
+        frame.put(0.toByte())
         frame.putInt(sequence)
         frame.putShort(((System.nanoTime() / 100_000L) and 0xFFFF).toShort())
         frame.putShort(length.toShort())
