@@ -260,7 +260,7 @@ final class AudioEngineBridge: NSObject {
         tcpOptions.noDelay = true
         let params = NWParameters(tls: nil, tcp: tcpOptions)
 
-        let nwPort = NWEndpoint.Port(rawValue: port) ?? 38900
+        let nwPort = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(integerLiteral: 38900)
         let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
         connection = conn
 

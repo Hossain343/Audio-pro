@@ -148,12 +148,15 @@ jobs:
             require "xcodeproj"
             proj = Xcodeproj::Project.open("Runner.xcodeproj")
             target = proj.targets.find { |t| t.name == "Runner" }
+            target.build_configurations.each do |config|
+              config.build_settings["IPHONEOS_DEPLOYMENT_TARGET"] = "15.0"
+            end
             group = proj.main_group.find_subpath("Runner", true)
             unless group.files.any? { |f| f.path == "AudioEngineBridge.swift" }
               ref = group.new_file("AudioEngineBridge.swift")
               target.add_file_references([ref])
-              proj.save
             end
+            proj.save
           '
           pod install --repo-update
 
