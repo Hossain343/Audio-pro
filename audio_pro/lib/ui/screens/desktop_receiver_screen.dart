@@ -278,10 +278,13 @@ class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
                     const SizedBox(height: 14),
                     const Divider(height: 1, color: CyberTheme.borderHairline),
                     const SizedBox(height: 12),
-                    Row(
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: <Widget>[
                         SizedBox(
-                          width: 210,
+                          width: 190,
                           child: TextField(
                             controller: _bindIpController,
                             style: const TextStyle(fontSize: 13),
@@ -301,9 +304,8 @@ class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 10),
                         SizedBox(
-                          width: 110,
+                          width: 100,
                           child: TextField(
                             controller: _portController,
                             keyboardType: TextInputType.number,
@@ -324,7 +326,6 @@ class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 10),
                         OutlinedButton(
                           onPressed: () => unawaited(_applyBindEndpoint()),
                           style: OutlinedButton.styleFrom(
@@ -339,7 +340,6 @@ class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
                           ),
                           child: const Text('Apply IP/Port'),
                         ),
-                        const SizedBox(width: 8),
                         OutlinedButton.icon(
                           onPressed: controller.isTestingEndpoint
                               ? null
@@ -361,15 +361,42 @@ class _DesktopReceiverScreenState extends State<DesktopReceiverScreen> {
                                 : 'Test IP / Port',
                           ),
                         ),
-                        const Spacer(),
+                        OutlinedButton(
+                          onPressed: () {
+                            _bindIpController.text = '0.0.0.0';
+                            _portController.text = '38900';
+                            unawaited(_applyBindEndpoint());
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: CyberTheme.textSecondary,
+                            side: const BorderSide(
+                              color: CyberTheme.borderHairline,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
+                          ),
+                          child: const Text('Reset (0.0.0.0)'),
+                        ),
                         const Text(
-                          'USB Cable: ADB + Apple usbmuxd',
+                          'USB Cable: ADB + Apple usbmuxd / Hotspot',
                           style: TextStyle(
                             fontSize: 12,
                             color: CyberTheme.textMuted,
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      controller.localIpAddresses.isNotEmpty
+                          ? 'Keep Server Bind IP as 0.0.0.0 · This PC IPs (enter on phone only if needed): ${controller.localIpAddresses.join("  |  ")}'
+                          : 'Keep Server Bind IP as 0.0.0.0 to accept USB (ADB / usbmuxd / 172.20.10.1) & local adapters.',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: CyberTheme.textSecondary,
+                      ),
                     ),
                     if (controller.endpointTestResult != null) ...<Widget>[
                       const SizedBox(height: 10),

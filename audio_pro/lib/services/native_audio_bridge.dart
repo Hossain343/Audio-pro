@@ -187,4 +187,14 @@ class NativeAudioBridge {
     final name = await _method.invokeMethod<String>('getLocalDeviceName');
     return name ?? 'AudioPro-Device';
   }
+
+  Future<List<String>> getLocalAddresses() async {
+    try {
+      final raw = await _method.invokeMethod<List<dynamic>>('getLocalAddresses');
+      if (raw == null) return const <String>[];
+      return raw.map((e) => e.toString()).toList(growable: false);
+    } on MissingPluginException {
+      return const <String>[];
+    }
+  }
 }

@@ -32,6 +32,8 @@ target_link_libraries(${BINARY_NAME} PRIVATE
   avrt.lib
   mmdevapi.lib
   ws2_32.lib
+  iphlpapi.lib
+  advapi32.lib
 )
 
 add_dependencies(${BINARY_NAME} flutter_assemble)

@@ -496,6 +496,7 @@ final class AudioEngineBridge: NSObject {
             tcpOptions.noDelay = true
             let params = NWParameters(tls: nil, tcp: tcpOptions)
             params.allowLocalEndpointReuse = true
+            params.preferNoProxies = true
 
             guard let nwPort = NWEndpoint.Port(rawValue: port),
                   let newListener = try? NWListener(using: params, on: nwPort) else {
@@ -590,6 +591,7 @@ final class AudioEngineBridge: NSObject {
             tcpOptions.noDelay = true
             tcpOptions.connectionTimeout = 3
             let params = NWParameters(tls: nil, tcp: tcpOptions)
+            params.preferNoProxies = true
 
             let nwPort = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(integerLiteral: 38900)
             let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)

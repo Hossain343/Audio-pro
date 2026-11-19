@@ -43,6 +43,7 @@ class AudioProWinBridge {
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
   flutter::EncodableList EnumerateWasapiEndpoints();
+  flutter::EncodableList GetLocalIpv4Adapters();
   flutter::EncodableMap TestEndpointAvailability(const std::string& ip, int port);
   void AdbUsbWatcherLoop(int port);
   void UsbmuxdUsbWatcherLoop(int port, std::string local_name);

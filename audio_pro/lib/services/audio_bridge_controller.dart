@@ -45,6 +45,7 @@ class AudioBridgeController extends ChangeNotifier {
 
   EndpointTestResult? endpointTestResult;
   bool isTestingEndpoint = false;
+  List<String> localIpAddresses = const <String>[];
 
   /// Dedicated ValueNotifier so high-frequency VU updates never rebuild the
   /// entire screen tree (prevents scroll/tap lag on iOS and Android).
@@ -96,6 +97,13 @@ class AudioBridgeController extends ChangeNotifier {
       addLog('APP', 'Local device name: $localDeviceName');
     } catch (e) {
       addLog('APP', 'getLocalDeviceName fallback ($e)');
+    }
+
+    if (isDesktopHost) {
+      localIpAddresses = await _bridge.getLocalAddresses();
+      if (localIpAddresses.isNotEmpty) {
+        addLog('NET', 'PC adapter IPs: ${localIpAddresses.join(", ")}');
+      }
     }
 
     if (!isDesktopHost) {
@@ -158,6 +166,12 @@ class AudioBridgeController extends ChangeNotifier {
         if (prevStatus != BridgeConnectionStatus.connecting) {
           addLog('EVENT', 'Connecting: ${transport ?? "probing"}');
         }
+      } else if (state == 'bind_error') {
+        status = BridgeConnectionStatus.disconnected;
+        vuNotifier.value = AudioVuSnapshot.zero;
+        lastError = '${remoteName ?? "Bind Error"} (${transport ?? ""})';
+        _reconnectTimer?.cancel();
+        addLog('EVENT', 'Bind failed: $lastError (fix Server Bind IP and click Apply)');
       } else if (state == 'disconnected') {
         final prevStatus = status;
         status = BridgeConnectionStatus.disconnected;

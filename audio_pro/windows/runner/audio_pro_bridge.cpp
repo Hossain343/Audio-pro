@@ -4,6 +4,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <iphlpapi.h>
+#include <winsvc.h>
 
 #include "audio_pro_bridge.h"
 
@@ -170,7 +172,56 @@ bool SendAll(SOCKET sock, const uint8_t* data, int len) {
   return true;
 }
 
-SOCKET ConnectLoopbackTcp(uint16_t port, int timeout_ms) {
+std::string CheckAppleServiceStatus() {
+  SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CONNECT);
+  if (!scm) return "unknown";
+  SC_HANDLE svc = OpenServiceA(scm, "Apple Mobile Device Service", SERVICE_QUERY_STATUS);
+  if (!svc) {
+    CloseServiceHandle(scm);
+    return "not_installed";
+  }
+  SERVICE_STATUS_PROCESS ssp{};
+  DWORD bytes_needed = 0;
+  std::string state = "installed";
+  if (QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO,
+                           reinterpret_cast<LPBYTE>(&ssp), sizeof(ssp), &bytes_needed)) {
+    state = (ssp.dwCurrentState == SERVICE_RUNNING) ? "running" : "stopped";
+  }
+  CloseServiceHandle(svc);
+  CloseServiceHandle(scm);
+  return state;
+}
+
+bool HasAppleUsbHotspotSubnet() {
+  ULONG buf_len = 16384;
+  std::vector<uint8_t> buf(buf_len);
+  auto* addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+  if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST,
+                           nullptr, addrs, &buf_len) == ERROR_BUFFER_OVERFLOW) {
+    buf.resize(buf_len);
+    addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+  }
+  if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST,
+                           nullptr, addrs, &buf_len) != NO_ERROR) {
+    return false;
+  }
+  for (auto* a = addrs; a != nullptr; a = a->Next) {
+    if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+    for (auto* u = a->FirstUnicastAddress; u != nullptr; u = u->Next) {
+      if (u->Address.lpSockaddr && u->Address.lpSockaddr->sa_family == AF_INET) {
+        auto* sin = reinterpret_cast<sockaddr_in*>(u->Address.lpSockaddr);
+        char ip[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
+        if (std::strncmp(ip, "172.20.10.", 10) == 0) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+SOCKET ConnectIpv4WithTimeout(const char* ip_str, uint16_t port, int timeout_ms) {
   SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (sock == INVALID_SOCKET) return INVALID_SOCKET;
 
@@ -179,8 +230,11 @@ SOCKET ConnectLoopbackTcp(uint16_t port, int timeout_ms) {
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   addr.sin_port = htons(port);
+  if (inet_pton(AF_INET, ip_str, &addr.sin_addr) <= 0) {
+    closesocket(sock);
+    return INVALID_SOCKET;
+  }
 
   int rc = connect(sock, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
   if (rc == SOCKET_ERROR) {
@@ -215,6 +269,10 @@ SOCKET ConnectLoopbackTcp(uint16_t port, int timeout_ms) {
   u_long blocking = 0;
   ioctlsocket(sock, FIONBIO, &blocking);
   return sock;
+}
+
+SOCKET ConnectLoopbackTcp(uint16_t port, int timeout_ms) {
+  return ConnectIpv4WithTimeout("127.0.0.1", port, timeout_ms);
 }
 
 bool SendUsbmuxPlist(SOCKET sock, uint32_t tag, const std::string& xml) {
@@ -483,6 +541,8 @@ void AudioProWinBridge::HandleMethodCall(
     result->Success(flutter::EncodableValue(TestEndpointAvailability(ip, port)));
   } else if (method == "listAudioEndpoints") {
     result->Success(flutter::EncodableValue(EnumerateWasapiEndpoints()));
+  } else if (method == "getLocalAddresses") {
+    result->Success(flutter::EncodableValue(GetLocalIpv4Adapters()));
   } else if (method == "setInputDevice") {
     if (const auto* args = std::get_if<flutter::EncodableMap>(call.arguments())) {
       auto it = args->find(flutter::EncodableValue("deviceId"));
@@ -636,10 +696,16 @@ flutter::EncodableMap AudioProWinBridge::TestEndpointAvailability(const std::str
   bool mux_reachable = false;
   std::atomic<bool> one_shot{true};
   auto usb_iphones = QueryUsbmuxUsbDevices(one_shot, &mux_reachable);
-  std::string usb_detail = mux_reachable
-      ? ("Apple usbmuxd (127.0.0.1:27015): ONLINE · USB iPhones detected: " +
-         std::to_string(usb_iphones.size()))
-      : "Apple usbmuxd (127.0.0.1:27015): OFFLINE (install Apple Devices or iTunes for direct iPhone USB cable)";
+  std::string svc_state = CheckAppleServiceStatus();
+  std::string usb_detail;
+  if (mux_reachable) {
+    usb_detail = "Apple usbmuxd (127.0.0.1:27015): ONLINE · USB iPhones detected: " +
+                 std::to_string(usb_iphones.size());
+  } else if (svc_state == "stopped") {
+    usb_detail = "Apple Mobile Device Service is STOPPED — start it in Windows Services, OR turn on iPhone Personal Hotspot over USB";
+  } else {
+    usb_detail = "Apple usbmuxd (127.0.0.1:27015): OFFLINE (install iTunes for Windows, OR turn on iPhone USB Personal Hotspot)";
+  }
 
   EmitLog("Endpoint test [" + ip + ":" + std::to_string(port) + "]: " + summary);
   EmitLog(usb_detail);
@@ -650,6 +716,38 @@ flutter::EncodableMap AudioProWinBridge::TestEndpointAvailability(const std::str
   res[flutter::EncodableValue("summary")] = flutter::EncodableValue(summary);
   res[flutter::EncodableValue("details")] = flutter::EncodableValue(usb_detail);
   return res;
+}
+
+flutter::EncodableList AudioProWinBridge::GetLocalIpv4Adapters() {
+  flutter::EncodableList list;
+  ULONG buf_len = 16384;
+  std::vector<uint8_t> buf(buf_len);
+  auto* addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+  if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST,
+                           nullptr, addrs, &buf_len) == ERROR_BUFFER_OVERFLOW) {
+    buf.resize(buf_len);
+    addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+  }
+  if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST,
+                           nullptr, addrs, &buf_len) != NO_ERROR) {
+    return list;
+  }
+
+  for (auto* a = addrs; a != nullptr; a = a->Next) {
+    if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+    std::string friendly = a->FriendlyName ? WideToUtf8(a->FriendlyName) : "Adapter";
+    for (auto* u = a->FirstUnicastAddress; u != nullptr; u = u->Next) {
+      if (u->Address.lpSockaddr && u->Address.lpSockaddr->sa_family == AF_INET) {
+        auto* sin = reinterpret_cast<sockaddr_in*>(u->Address.lpSockaddr);
+        char ip[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
+        std::string ip_str(ip);
+        if (ip_str.rfind("169.254.", 0) == 0) continue;
+        list.push_back(flutter::EncodableValue(ip_str + " (" + friendly + ")"));
+      }
+    }
+  }
+  return list;
 }
 
 flutter::EncodableList AudioProWinBridge::EnumerateWasapiEndpoints() {
@@ -798,6 +896,7 @@ void AudioProWinBridge::AdbUsbWatcherLoop(int port) {
 void AudioProWinBridge::UsbmuxdUsbWatcherLoop(int port, std::string local_name) {
   int last_mux_state = -999;  // -1: offline, 0: no device, >0: device_id
   int last_conn_err = -999;
+  bool logged_hotspot_probe = false;
 
   while (running_.load()) {
     if (!session_busy_.load()) {
@@ -807,7 +906,12 @@ void AudioProWinBridge::UsbmuxdUsbWatcherLoop(int port, std::string local_name) 
       if (!mux_reachable) {
         if (last_mux_state != -1) {
           last_mux_state = -1;
-          EmitLog("Apple usbmuxd (127.0.0.1:27015) offline — install Apple Devices or iTunes for direct iPhone USB cable");
+          std::string svc = CheckAppleServiceStatus();
+          if (svc == "stopped") {
+            EmitLog("Apple Mobile Device Service is STOPPED — start it in Windows Services, or enable iPhone USB Hotspot");
+          } else {
+            EmitLog("Apple usbmuxd (127.0.0.1:27015) offline — install Apple iTunes or enable iPhone USB Personal Hotspot");
+          }
         }
       } else if (devices.empty()) {
         if (last_mux_state != 0) {
@@ -844,6 +948,30 @@ void AudioProWinBridge::UsbmuxdUsbWatcherLoop(int port, std::string local_name) 
                   " (make sure AudioPro is open on iPhone with matching port)");
         }
       }
+
+      // Fallback USB path without usbmuxd: Apple USB Personal Hotspot creates 172.20.10.x adapter -> gateway 172.20.10.1
+      if (!session_busy_.load() && HasAppleUsbHotspotSubnet()) {
+        if (!logged_hotspot_probe) {
+          logged_hotspot_probe = true;
+          EmitLog("iPhone USB Hotspot adapter (172.20.10.x) detected — probing 172.20.10.1:" +
+                  std::to_string(port));
+        }
+        SOCKET hs_sock = ConnectIpv4WithTimeout("172.20.10.1", static_cast<uint16_t>(port), 500);
+        if (hs_sock != INVALID_SOCKET) {
+          bool expected = false;
+          if (session_busy_.compare_exchange_strong(expected, true)) {
+            EmitLog("Connected directly over iPhone USB Hotspot cable (172.20.10.1:" +
+                    std::to_string(port) + ")");
+            RunBridgeSession(static_cast<uintptr_t>(hs_sock), local_name,
+                             "USB Hotspot Cable");
+            session_busy_.store(false);
+          } else {
+            closesocket(hs_sock);
+          }
+        }
+      } else {
+        logged_hotspot_probe = false;
+      }
     }
 
     for (int i = 0; i < 15 && running_.load(); i++) {
@@ -856,7 +984,7 @@ void AudioProWinBridge::SocketServerLoop(std::string bind_ip, int port, std::str
   SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (listen_sock == INVALID_SOCKET) {
     EmitLog("Socket creation failed, WSA error=" + std::to_string(WSAGetLastError()));
-    EmitStatus("disconnected", "Socket Init Failed", "Port Error");
+    EmitStatus("bind_error", "Socket Init Failed", "Port Error");
     return;
   }
 
@@ -872,7 +1000,7 @@ void AudioProWinBridge::SocketServerLoop(std::string bind_ip, int port, std::str
   } else if (inet_pton(AF_INET, bind_ip.c_str(), &addr.sin_addr) <= 0) {
     closesocket(listen_sock);
     EmitLog("Invalid Bind IP: " + bind_ip);
-    EmitStatus("disconnected", "Invalid IP (" + bind_ip + ")", "Bind Error");
+    EmitStatus("bind_error", "Invalid Bind IP (" + bind_ip + ")", "Bind Error");
     return;
   }
 
@@ -882,7 +1010,8 @@ void AudioProWinBridge::SocketServerLoop(std::string bind_ip, int port, std::str
     closesocket(listen_sock);
     EmitLog("TCP bind/listen failed on " + bind_ip + ":" + std::to_string(port) +
             " WSA error=" + std::to_string(err));
-    EmitStatus("disconnected", "Port Busy (" + std::to_string(port) + ")", "Bind Error");
+    EmitStatus("bind_error", "Bind Error (" + bind_ip + ":" + std::to_string(port) + ")",
+               "WSA " + std::to_string(err));
     return;
   }
 

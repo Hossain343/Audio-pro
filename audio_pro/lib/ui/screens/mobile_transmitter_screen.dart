@@ -202,15 +202,20 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                             flex: 3,
                             child: TextField(
                               controller: _hostController,
-                              style: const TextStyle(fontSize: 13),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                              style: const TextStyle(fontSize: 14),
                               decoration: InputDecoration(
                                 labelText: 'USB Tunnel / PC IP',
+                                hintText: '127.0.0.1',
                                 filled: true,
                                 fillColor: CyberTheme.bgVoid,
                                 isDense: true,
                                 contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 10,
+                                  horizontal: 12,
+                                  vertical: 12,
                                 ),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
@@ -218,21 +223,22 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 10),
                           Expanded(
                             flex: 2,
                             child: TextField(
                               controller: _portController,
                               keyboardType: TextInputType.number,
-                              style: const TextStyle(fontSize: 13),
+                              style: const TextStyle(fontSize: 14),
                               decoration: InputDecoration(
                                 labelText: 'Port',
+                                hintText: '38900',
                                 filled: true,
                                 fillColor: CyberTheme.bgVoid,
                                 isDense: true,
                                 contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 10,
+                                  horizontal: 12,
+                                  vertical: 12,
                                 ),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
@@ -240,21 +246,49 @@ class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          OutlinedButton(
-                            onPressed: () => unawaited(_applyEndpoint()),
-                            child: const Text('Set'),
-                          ),
-                          const SizedBox(width: 6),
-                          OutlinedButton(
-                            onPressed: controller.isTestingEndpoint
-                                ? null
-                                : () => unawaited(_testEndpoint()),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: CyberTheme.cyanAccent,
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => unawaited(_applyEndpoint()),
+                              icon: const Icon(Icons.check_rounded, size: 16),
+                              label: const Text('Apply IP/Port'),
                             ),
-                            child: Text(
-                              controller.isTestingEndpoint ? '...' : 'Test',
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: controller.isTestingEndpoint
+                                  ? null
+                                  : () => unawaited(_testEndpoint()),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: CyberTheme.cyanAccent,
+                              ),
+                              icon: const Icon(
+                                Icons.network_check_rounded,
+                                size: 16,
+                              ),
+                              label: Text(
+                                controller.isTestingEndpoint
+                                    ? 'Testing...'
+                                    : 'Test IP/Port',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            tooltip: 'Reset to USB (127.0.0.1)',
+                            onPressed: () {
+                              _hostController.text = '127.0.0.1';
+                              _portController.text = '38900';
+                              unawaited(_applyEndpoint());
+                            },
+                            icon: const Icon(
+                              Icons.usb_rounded,
+                              color: CyberTheme.cyanAccent,
                             ),
                           ),
                         ],
