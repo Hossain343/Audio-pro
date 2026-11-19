@@ -10,10 +10,20 @@ import Flutter
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         GeneratedPluginRegistrant.register(with: self)
-
-        if let controller = window?.rootViewController as? FlutterViewController {
-            audioBridge = AudioEngineBridge(messenger: controller.binaryMessenger)
-        }
+        ensureBridgeInitialized()
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+
+    override func applicationDidBecomeActive(_ application: UIApplication) {
+        super.applicationDidBecomeActive(application)
+        ensureBridgeInitialized()
+    }
+
+    private func ensureBridgeInitialized() {
+        guard audioBridge == nil,
+              let controller = window?.rootViewController as? FlutterViewController else {
+            return
+        }
+        audioBridge = AudioEngineBridge(messenger: controller.binaryMessenger)
     }
 }

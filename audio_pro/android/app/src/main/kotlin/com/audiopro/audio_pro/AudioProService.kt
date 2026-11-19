@@ -35,6 +35,7 @@ class AudioProService : Service() {
         const val ACTION_START = "com.audiopro.START"
         const val ACTION_STOP = "com.audiopro.STOP"
         const val EXTRA_PORT = "port"
+        const val EXTRA_HOST = "host"
         const val EXTRA_DEVICE_NAME = "deviceName"
         private const val CHANNEL_ID = "audiopro_usb_bridge"
         private const val NOTIF_ID = 3890
@@ -45,6 +46,7 @@ class AudioProService : Service() {
         @Volatile var preferredOutputDevice: AudioDeviceInfo? = null
         @Volatile var outputGain: Float = 0.85f
         @Volatile var isInputMuted: Boolean = false
+        @Volatile var isTestToneEnabled: Boolean = false
         @Volatile var wakeLockDesired: Boolean = true
     }
 
@@ -68,10 +70,16 @@ class AudioProService : Service() {
             }
             ACTION_START, null -> {
                 val port = intent?.getIntExtra(EXTRA_PORT, 38900) ?: 38900
+                val host = intent?.getStringExtra(EXTRA_HOST)?.trim()
                 val deviceName = intent?.getStringExtra(EXTRA_DEVICE_NAME) ?: Build.MODEL
-                startForeground(NOTIF_ID, buildNotification("Waiting for USB Windows Host..."))
+                try {
+                    startForeground(NOTIF_ID, buildNotification("Waiting for USB Windows Host..."))
+                } catch (_: SecurityException) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 acquireWakeLockIfNeeded()
-                startBridgeLoop(port, deviceName)
+                startBridgeLoop(port, host, deviceName)
             }
         }
         return START_STICKY
@@ -117,10 +125,15 @@ class AudioProService : Service() {
         nm.notify(NOTIF_ID, buildNotification(text))
     }
 
-    private fun startBridgeLoop(port: Int, deviceName: String) {
+    private fun startBridgeLoop(port: Int, preferredHost: String?, deviceName: String) {
         if (running.getAndSet(true)) return
         workerThread = Thread({
-            val candidateHosts = listOf("127.0.0.1", "192.168.42.129")
+            val candidateHosts = buildList {
+                if (!preferredHost.isNullOrBlank()) add(preferredHost)
+                if (!contains("127.0.0.1")) add("127.0.0.1")
+                if (!contains("192.168.42.129")) add("192.168.42.129")
+                if (!contains("192.168.43.1")) add("192.168.43.1")
+            }
             var hostIdx = 0
 
             while (running.get()) {
@@ -271,6 +284,10 @@ class AudioProService : Service() {
         val micBuf = ByteArray(frameBytes)
         var seq = 1
         var lastVuPushMs = 0L
+        var lastRateMs = System.currentTimeMillis()
+        var ppsCount = 0
+        var measuredPps = 0
+        var tonePhase = 0.0
 
         while (running.get() && activeFlag.get()) {
             val read = recorder.read(micBuf, 0, micBuf.size)
@@ -280,16 +297,33 @@ class AudioProService : Service() {
                     lastInputRms = 0.0
                     lastInputPeak = 0.0
                 } else {
+                    if (isTestToneEnabled) {
+                        var i = 0
+                        while (i + 1 < read) {
+                            val s = (0.25 * kotlin.math.sin(tonePhase) * 32767.0).toInt().coerceIn(-32768, 32767)
+                            micBuf[i] = (s and 0xFF).toByte()
+                            micBuf[i + 1] = ((s shr 8) and 0xFF).toByte()
+                            tonePhase += 2.0 * kotlin.math.PI * 440.0 / sampleRate
+                            if (tonePhase > 2.0 * kotlin.math.PI) tonePhase -= 2.0 * kotlin.math.PI
+                            i += 2
+                        }
+                    }
                     val levels = computeRmsPeak(micBuf, read)
                     lastInputRms = levels.first
                     lastInputPeak = levels.second
                 }
                 sendPacket(outStream, type = 2, channels = 1, sequence = seq++, payload = micBuf, length = read)
+                ppsCount++
 
                 val now = System.currentTimeMillis()
+                if (now - lastRateMs >= 1000) {
+                    measuredPps = ppsCount
+                    ppsCount = 0
+                    lastRateMs = now
+                }
                 if (now - lastVuPushMs >= 33) {
                     lastVuPushMs = now
-                    emitVu(lastInputRms, lastInputPeak, lastOutputRms)
+                    emitVu(lastInputRms, lastInputPeak, lastOutputRms, measuredPps)
                 }
             }
         }
@@ -373,7 +407,7 @@ class AudioProService : Service() {
         }
     }
 
-    private fun emitVu(inRms: Double, inPeak: Double, outRms: Double) {
+    private fun emitVu(inRms: Double, inPeak: Double, outRms: Double, pps: Int) {
         mainHandler.post {
             vuSink?.success(
                 mapOf(
@@ -382,7 +416,7 @@ class AudioProService : Service() {
                     "outputRms" to outRms,
                     "latencyMs" to 24.5,
                     "jitterMs" to 3.2,
-                    "packetsPerSecond" to 200,
+                    "packetsPerSecond" to (if (pps > 0) pps else 200),
                     "packetLossPct" to 0.0
                 )
             )

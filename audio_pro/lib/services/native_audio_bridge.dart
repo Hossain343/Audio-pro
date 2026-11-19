@@ -32,11 +32,13 @@ class NativeAudioBridge {
   Future<bool> startBridge({
     required bool isHostMode,
     required String localDeviceName,
+    String host = '127.0.0.1',
     int port = 38900,
   }) async {
     final ok = await _method.invokeMethod<bool>('startBridge', <String, dynamic>{
       'isHostMode': isHostMode,
       'localDeviceName': localDeviceName,
+      'host': host,
       'port': port,
     });
     return ok ?? false;
@@ -67,6 +69,48 @@ class NativeAudioBridge {
       'deviceId': deviceId,
     });
     return ok ?? false;
+  }
+
+  Future<void> setVirtualEndpoints({
+    required String virtualMicName,
+    required String virtualSpkName,
+  }) async {
+    try {
+      await _method.invokeMethod<void>('setVirtualEndpoints', <String, dynamic>{
+        'virtualMicName': virtualMicName,
+        'virtualSpkName': virtualSpkName,
+      });
+    } on MissingPluginException {
+      // Optional on mobile platforms
+    }
+  }
+
+  Future<void> setLoopbackEnabled(bool enabled) async {
+    try {
+      await _method.invokeMethod<void>('setLoopbackEnabled', <String, dynamic>{
+        'enabled': enabled,
+      });
+    } on MissingPluginException {
+      // Windows-only
+    }
+  }
+
+  Future<void> triggerHostPulse() async {
+    try {
+      await _method.invokeMethod<void>('triggerHostPulse');
+    } on MissingPluginException {
+      // Windows-only
+    }
+  }
+
+  Future<void> setTestToneEnabled(bool enabled) async {
+    try {
+      await _method.invokeMethod<void>('setTestToneEnabled', <String, dynamic>{
+        'enabled': enabled,
+      });
+    } on MissingPluginException {
+      // Optional
+    }
   }
 
   Future<void> setOutputVolume(double volume) async {

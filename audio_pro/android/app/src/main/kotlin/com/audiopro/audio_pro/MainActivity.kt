@@ -58,10 +58,12 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "startBridge" -> {
                         val port = call.argument<Int>("port") ?: 38900
+                        val host = call.argument<String>("host")
                         val name = call.argument<String>("localDeviceName") ?: Build.MODEL
                         val intent = Intent(this, AudioProService::class.java).apply {
                             action = AudioProService.ACTION_START
                             putExtra(AudioProService.EXTRA_PORT, port)
+                            putExtra(AudioProService.EXTRA_HOST, host)
                             putExtra(AudioProService.EXTRA_DEVICE_NAME, name)
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -97,6 +99,11 @@ class MainActivity : FlutterActivity() {
                     "setInputMuted" -> {
                         val muted = call.argument<Boolean>("muted") ?: false
                         AudioProService.isInputMuted = muted
+                        result.success(null)
+                    }
+                    "setTestToneEnabled" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        AudioProService.isTestToneEnabled = enabled
                         result.success(null)
                     }
                     "setBackgroundLockEnabled" -> {

@@ -21,16 +21,24 @@ class AudioBridgeController extends ChangeNotifier {
       ? PeerInfo.unknownMobile
       : PeerInfo.unknownDesktop;
 
+  String localDeviceName = Platform.isWindows ? 'WINDOWS-HOST' : 'Mobile Device';
   List<AudioEndpoint> inputDevices = const <AudioEndpoint>[];
   List<AudioEndpoint> outputDevices = const <AudioEndpoint>[];
 
   AudioEndpoint? selectedInput;
   AudioEndpoint? selectedOutput;
 
+  String virtualMicName = 'AudioPro Virtual Mic';
+  String virtualSpkName = 'AudioPro Virtual Speaker';
+  String hostAddress = '127.0.0.1';
+  int port = 38900;
+
   double outputVolume = 0.85;
   bool isInputMuted = false;
   bool isBackgroundLockActive = true;
   bool autoConnectEnabled = true;
+  bool loopbackEnabled = true;
+  bool testToneEnabled = false;
 
   AudioVuSnapshot vuSnapshot = AudioVuSnapshot.zero;
   String? lastError;
@@ -39,6 +47,12 @@ class AudioBridgeController extends ChangeNotifier {
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
   Future<void> initialize() async {
+    try {
+      localDeviceName = await _bridge.getLocalDeviceName();
+    } catch (_) {
+      // Keep default fallback
+    }
+
     if (!isDesktopHost) {
       await _requestMobilePermissions();
     }
@@ -73,8 +87,18 @@ class AudioBridgeController extends ChangeNotifier {
         _reconnectTimer?.cancel();
       } else if (state == 'connecting') {
         status = BridgeConnectionStatus.connecting;
+        if (transport != null && transport.isNotEmpty) {
+          peerInfo = PeerInfo(
+            deviceName: peerInfo.deviceName,
+            platformName: peerInfo.platformName,
+            transportLabel: transport,
+            sampleRateHz: 48000,
+            frameDurationMs: 5,
+          );
+        }
       } else if (state == 'disconnected') {
         status = BridgeConnectionStatus.disconnected;
+        vuSnapshot = AudioVuSnapshot.zero;
         if (autoConnectEnabled) {
           _scheduleReconnect();
         }
@@ -87,17 +111,30 @@ class AudioBridgeController extends ChangeNotifier {
     });
 
     await refreshEndpoints();
+    if (isDesktopHost) {
+      await _bridge.setVirtualEndpoints(
+        virtualMicName: virtualMicName,
+        virtualSpkName: virtualSpkName,
+      );
+      await _bridge.setLoopbackEnabled(loopbackEnabled);
+    }
+
     if (autoConnectEnabled) {
       await connectBridge();
     }
   }
 
   Future<void> _requestMobilePermissions() async {
-    await <Permission>[
-      Permission.microphone,
-      Permission.bluetoothConnect,
-      Permission.notification,
-    ].request();
+    try {
+      final permissions = <Permission>[
+        Permission.microphone,
+        if (Platform.isAndroid) Permission.bluetoothConnect else Permission.bluetooth,
+        Permission.notification,
+      ];
+      await permissions.request();
+    } catch (_) {
+      // Do not fail app startup if platform permission prompt throws
+    }
   }
 
   Future<void> refreshEndpoints() async {
@@ -106,17 +143,21 @@ class AudioBridgeController extends ChangeNotifier {
       inputDevices = all.where((d) => d.isInput).toList(growable: false);
       outputDevices = all.where((d) => !d.isInput).toList(growable: false);
 
-      if (selectedInput == null && inputDevices.isNotEmpty) {
-        selectedInput = inputDevices.firstWhere(
-          (d) => d.isDefault,
-          orElse: () => inputDevices.first,
-        );
+      if (selectedInput == null || !inputDevices.contains(selectedInput)) {
+        selectedInput = inputDevices.isNotEmpty
+            ? inputDevices.firstWhere(
+                (d) => d.isDefault,
+                orElse: () => inputDevices.first,
+              )
+            : null;
       }
-      if (selectedOutput == null && outputDevices.isNotEmpty) {
-        selectedOutput = outputDevices.firstWhere(
-          (d) => d.isDefault,
-          orElse: () => outputDevices.first,
-        );
+      if (selectedOutput == null || !outputDevices.contains(selectedOutput)) {
+        selectedOutput = outputDevices.isNotEmpty
+            ? outputDevices.firstWhere(
+                (d) => d.isDefault,
+                orElse: () => outputDevices.first,
+              )
+            : null;
       }
       notifyListeners();
     } on PlatformException catch (e) {
@@ -132,14 +173,18 @@ class AudioBridgeController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final localName = await _bridge.getLocalDeviceName();
+      localDeviceName = await _bridge.getLocalDeviceName();
       await _bridge.setBackgroundLockEnabled(isBackgroundLockActive);
       final started = await _bridge.startBridge(
         isHostMode: isDesktopHost,
-        localDeviceName: localName,
+        localDeviceName: localDeviceName,
+        host: hostAddress,
+        port: port,
       );
       if (!started && autoConnectEnabled) {
+        status = BridgeConnectionStatus.disconnected;
         _scheduleReconnect();
+        notifyListeners();
       }
     } on PlatformException catch (e) {
       status = BridgeConnectionStatus.disconnected;
@@ -166,6 +211,58 @@ class AudioBridgeController extends ChangeNotifier {
         unawaited(connectBridge());
       }
     });
+  }
+
+  Future<void> applyVirtualEndpoints({
+    required String micName,
+    required String spkName,
+  }) async {
+    final trimmedMic = micName.trim();
+    final trimmedSpk = spkName.trim();
+    virtualMicName = trimmedMic.isEmpty ? 'AudioPro Virtual Mic' : trimmedMic;
+    virtualSpkName = trimmedSpk.isEmpty ? 'AudioPro Virtual Speaker' : trimmedSpk;
+    notifyListeners();
+    await _bridge.setVirtualEndpoints(
+      virtualMicName: virtualMicName,
+      virtualSpkName: virtualSpkName,
+    );
+  }
+
+  Future<void> toggleLoopback(bool enabled) async {
+    loopbackEnabled = enabled;
+    notifyListeners();
+    await _bridge.setLoopbackEnabled(enabled);
+  }
+
+  Future<void> triggerHostPulse() async {
+    await _bridge.triggerHostPulse();
+  }
+
+  Future<void> toggleTestTone(bool enabled) async {
+    testToneEnabled = enabled;
+    notifyListeners();
+    await _bridge.setTestToneEnabled(enabled);
+  }
+
+  Future<void> setAutoConnect(bool enabled) async {
+    autoConnectEnabled = enabled;
+    if (!enabled) {
+      _reconnectTimer?.cancel();
+    } else if (status == BridgeConnectionStatus.disconnected) {
+      unawaited(connectBridge());
+    }
+    notifyListeners();
+  }
+
+  Future<void> updateTargetEndpoint(String host, int newPort) async {
+    final cleanHost = host.trim();
+    hostAddress = cleanHost.isEmpty ? '127.0.0.1' : cleanHost;
+    port = newPort.clamp(1024, 65535);
+    notifyListeners();
+    if (status != BridgeConnectionStatus.disconnected) {
+      await disconnectBridge();
+      await connectBridge();
+    }
   }
 
   Future<void> selectInputDevice(AudioEndpoint endpoint) async {

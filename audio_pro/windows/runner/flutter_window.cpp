@@ -33,7 +33,7 @@ bool FlutterWindow::Create(const std::wstring& title, const POINT& origin,
 
   RegisterPlugins(flutter_controller_->engine());
   audio_bridge_ = std::make_unique<AudioProWinBridge>(
-      flutter_controller_->engine()->messenger());
+      flutter_controller_->engine()->messenger(), window_handle_);
 
   SetParent(flutter_controller_->view()->GetNativeWindow(), window_handle_);
   flutter_controller_->ForceRedraw();
@@ -65,6 +65,11 @@ LRESULT FlutterWindow::MessageHandler(HWND window, UINT const message,
     if (result) return *result;
   }
   switch (message) {
+    case AudioProWinBridge::kWmDrainEvents:
+      if (audio_bridge_) {
+        audio_bridge_->DrainPendingEvents();
+      }
+      return 0;
     case WM_SIZE:
       if (flutter_controller_ && flutter_controller_->view()) {
         RECT r;
@@ -74,6 +79,7 @@ LRESULT FlutterWindow::MessageHandler(HWND window, UINT const message,
       }
       return 0;
     case WM_DESTROY:
+      audio_bridge_.reset();
       PostQuitMessage(0);
       return 0;
   }

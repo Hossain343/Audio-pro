@@ -5,7 +5,7 @@ import '../../services/audio_bridge_controller.dart';
 import '../theme/cyber_theme.dart';
 import '../widgets/vu_meter_waveform.dart';
 
-class MobileTransmitterScreen extends StatelessWidget {
+class MobileTransmitterScreen extends StatefulWidget {
   const MobileTransmitterScreen({
     super.key,
     required this.controller,
@@ -14,7 +14,41 @@ class MobileTransmitterScreen extends StatelessWidget {
   final AudioBridgeController controller;
 
   @override
+  State<MobileTransmitterScreen> createState() => _MobileTransmitterScreenState();
+}
+
+class _MobileTransmitterScreenState extends State<MobileTransmitterScreen> {
+  late final TextEditingController _hostController;
+  late final TextEditingController _portController;
+
+  @override
+  void initState() {
+    super.initState();
+    _hostController = TextEditingController(text: widget.controller.hostAddress);
+    _portController = TextEditingController(
+      text: widget.controller.port.toString(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _hostController.dispose();
+    _portController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _applyEndpoint() async {
+    final parsedPort = int.tryParse(_portController.text.trim()) ?? 38900;
+    await widget.controller.updateTargetEndpoint(
+      _hostController.text,
+      parsedPort,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
@@ -129,6 +163,69 @@ class MobileTransmitterScreen extends StatelessWidget {
                           color: CyberTheme.textSecondary,
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text(
+                          'Auto-connect on USB attach',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        value: controller.autoConnectEnabled,
+                        onChanged: (v) => unawaited(controller.setAutoConnect(v)),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            flex: 3,
+                            child: TextField(
+                              controller: _hostController,
+                              style: const TextStyle(fontSize: 13),
+                              decoration: InputDecoration(
+                                labelText: 'USB Tunnel / PC IP',
+                                filled: true,
+                                fillColor: CyberTheme.bgVoid,
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 10,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: _portController,
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(fontSize: 13),
+                              decoration: InputDecoration(
+                                labelText: 'Port',
+                                filled: true,
+                                fillColor: CyberTheme.bgVoid,
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 10,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton(
+                            onPressed: () => unawaited(_applyEndpoint()),
+                            child: const Text('Set'),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -157,17 +254,44 @@ class MobileTransmitterScreen extends StatelessWidget {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          IconButton(
-                            onPressed: controller.toggleInputMute,
-                            icon: Icon(
-                              controller.isInputMuted
-                                  ? Icons.mic_off_rounded
-                                  : Icons.mic_rounded,
-                              color: controller.isInputMuted
-                                  ? CyberTheme.crimsonOff
-                                  : CyberTheme.cyanAccent,
-                            ),
-                            tooltip: controller.isInputMuted ? 'Unmute' : 'Mute',
+                          Row(
+                            children: <Widget>[
+                              TextButton.icon(
+                                onPressed: () => unawaited(
+                                  controller.toggleTestTone(!controller.testToneEnabled),
+                                ),
+                                icon: Icon(
+                                  controller.testToneEnabled
+                                      ? Icons.waves_rounded
+                                      : Icons.graphic_eq_rounded,
+                                  size: 16,
+                                  color: controller.testToneEnabled
+                                      ? CyberTheme.amberWait
+                                      : CyberTheme.cyanAccent,
+                                ),
+                                label: Text(
+                                  controller.testToneEnabled ? 'Test Tone' : 'Live Mic',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: controller.testToneEnabled
+                                        ? CyberTheme.amberWait
+                                        : CyberTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: controller.toggleInputMute,
+                                icon: Icon(
+                                  controller.isInputMuted
+                                      ? Icons.mic_off_rounded
+                                      : Icons.mic_rounded,
+                                  color: controller.isInputMuted
+                                      ? CyberTheme.crimsonOff
+                                      : CyberTheme.cyanAccent,
+                                ),
+                                tooltip: controller.isInputMuted ? 'Unmute' : 'Mute',
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -218,6 +342,7 @@ class MobileTransmitterScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                       VuMeterWaveform(
+                        label: 'Mic Input Levelizer',
                         rms: controller.vuSnapshot.inputRms,
                         peak: controller.vuSnapshot.inputPeak,
                         isMuted: controller.isInputMuted,

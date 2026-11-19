@@ -1,11 +1,10 @@
 #ifndef RUNNER_FLUTTER_WINDOW_H_
 #define RUNNER_FLUTTER_WINDOW_H_
 
+#include "audio_pro_bridge.h"
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
-#include <windows.h>
 #include <memory>
-#include "audio_pro_bridge.h"
 
 class FlutterWindow {
  public:

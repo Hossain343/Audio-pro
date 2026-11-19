@@ -1,6 +1,12 @@
 #ifndef AUDIO_PRO_BRIDGE_H_
 #define AUDIO_PRO_BRIDGE_H_
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <windows.h>
+
 #include <flutter/binary_messenger.h>
 #include <flutter/encodable_value.h>
 #include <flutter/event_channel.h>
@@ -9,6 +15,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -17,13 +24,21 @@
 
 class AudioProWinBridge {
  public:
-  explicit AudioProWinBridge(flutter::BinaryMessenger* messenger);
+  static constexpr UINT kWmDrainEvents = WM_APP + 101;
+
+  explicit AudioProWinBridge(flutter::BinaryMessenger* messenger, HWND hwnd = nullptr);
   ~AudioProWinBridge();
 
   void StartBridge(int port, const std::string& local_name);
   void StopBridge();
+  void DrainPendingEvents();
 
  private:
+  struct PendingEvent {
+    bool is_vu;
+    flutter::EncodableMap payload;
+  };
+
   void HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
@@ -33,8 +48,10 @@ class AudioProWinBridge {
   void SocketServerLoop(int port, std::string local_name);
   void EmitStatus(const std::string& status, const std::string& peer_name,
                   const std::string& transport);
-  void EmitVu(double in_rms, double in_peak, double out_rms);
+  void EmitVu(double in_rms, double in_peak, double out_rms, double jitter_ms, int pps);
+  void EnqueueEvent(bool is_vu, flutter::EncodableMap map);
 
+  HWND hwnd_ = nullptr;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> method_channel_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>> vu_channel_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>> usb_channel_;
@@ -43,11 +60,24 @@ class AudioProWinBridge {
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> usb_sink_;
   std::mutex sink_mutex_;
 
-  std::atomic<bool> running_{false};
-  std::atomic<bool> input_muted_{false};
-  std::atomic<float> output_gain_{0.85f};
+  std::mutex event_mutex_;
+  std::deque<PendingEvent> pending_events_;
+
+  std::mutex config_mutex_;
   std::string preferred_render_id_;
   std::string preferred_capture_id_;
+  std::string virtual_mic_name_ = "AudioPro Virtual Mic";
+  std::string virtual_spk_name_ = "AudioPro Virtual Speaker";
+
+  std::mutex render_ring_mutex_;
+  std::deque<int16_t> render_ring_;
+
+  std::atomic<bool> running_{false};
+  std::atomic<bool> input_muted_{false};
+  std::atomic<bool> loopback_enabled_{true};
+  std::atomic<float> output_gain_{0.85f};
+  std::atomic<int> pulse_frames_remaining_{0};
+  std::atomic<double> latest_output_rms_{0.0};
 
   std::thread adb_thread_;
   std::thread server_thread_;

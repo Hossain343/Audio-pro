@@ -51,8 +51,9 @@ export default function App() {
   const [backgroundLock, setBackgroundLock] = useState(true);
   const [screenLocked, setScreenLocked] = useState(false);
 
-  const [virtualMicName, setVirtualMicName] = useState('AudioPro Virtual Mic (WDM)');
-  const [virtualSpkName, setVirtualSpkName] = useState('AudioPro Virtual Speaker (WASAPI)');
+  const [virtualMicName, setVirtualMicName] = useState('AudioPro Virtual Mic');
+  const [virtualSpkName, setVirtualSpkName] = useState('AudioPro Virtual Speaker');
+  const [loopbackEnabled, setLoopbackEnabled] = useState(true);
 
   const [inputLevels, setInputLevels] = useState({ rms: 0.24, peak: 0.42, dbfs: -12.4 });
   const [outputRms, setOutputRms] = useState(0.18);
@@ -157,9 +158,11 @@ export default function App() {
         setInputLevels({ rms: cadence, peak, dbfs });
       }
 
-      if (streamActive) {
+      if (streamActive && (loopbackEnabled || hostPulseRef.current > 0.01)) {
         hostPulseRef.current = Math.max(0, hostPulseRef.current - 0.015);
-        const baseOut = 0.14 + 0.09 * Math.abs(Math.sin(tick * 1.3)) + hostPulseRef.current;
+        const baseOut =
+          (loopbackEnabled ? 0.14 + 0.09 * Math.abs(Math.sin(tick * 1.3)) : 0) +
+          hostPulseRef.current;
         setOutputRms(Math.min(1, baseOut));
       } else {
         setOutputRms(0);
@@ -170,7 +173,7 @@ export default function App() {
 
     rafId = requestAnimationFrame(updateMeter);
     return () => cancelAnimationFrame(rafId);
-  }, [status, isMuted, audioSourceMode, screenLocked, backgroundLock]);
+  }, [status, isMuted, audioSourceMode, screenLocked, backgroundLock, loopbackEnabled]);
 
   const handleTriggerHostBeep = () => {
     hostPulseRef.current = 0.65;
@@ -270,9 +273,12 @@ export default function App() {
                 onChangeVirtualMic={setVirtualMicName}
                 virtualSpkName={virtualSpkName}
                 onChangeVirtualSpk={setVirtualSpkName}
+                loopbackEnabled={loopbackEnabled}
+                onToggleLoopback={setLoopbackEnabled}
                 inputLevels={inputLevels}
                 outputRms={outputRms}
                 isMuted={isMuted}
+                onToggleMute={() => setIsMuted((m) => !m)}
                 onTriggerHostBeep={handleTriggerHostBeep}
               />
             </div>
